@@ -1,0 +1,12 @@
+[package]
+name = "actix-extensible-rate-limit"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-utils = "3"
+actix-web = { version = "4", default-features = false, features = ["macros"] }
+async-trait = "0.1.49"
+dashmap = "5.2.0"

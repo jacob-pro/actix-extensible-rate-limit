@@ -1,0 +1,25 @@
+name: Rust Build
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Cargo Test
+        run: cargo test --workspace -- --nocapture
+
+      - name: Cargo Format Check
+        run: cargo fmt -- --check
+
+      - name: Cargo Clippy Check
+        run: cargo clippy --all-features --workspace -- -D warnings
+
+      - name: Cargo Sort Check
+        run: cargo install cargo-sort --debug && cargo-sort --check --workspace
