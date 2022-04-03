@@ -23,14 +23,3 @@ pub trait Backend: Clone {
     /// * `interval`: The original interval is required to locate the correct bucket.
     async fn decrement(&self, key: &str, interval: Duration);
 }
-
-#[async_trait]
-impl Backend for () {
-    async fn get_and_increment(&self, _key: &str, _interval: Duration) -> (usize, Instant) {
-        (5, Instant::now())
-    }
-
-    async fn decrement(&self, _key: &str, _interval: Duration) {
-        todo!()
-    }
-}
