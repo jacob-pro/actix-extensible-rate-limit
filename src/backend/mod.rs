@@ -9,8 +9,8 @@ pub trait Backend: Clone {
     /// # Arguments
     ///
     /// * `key`: The rate limit key
-    /// * `interval`: The interval is required for two reasons: (a) creating a new bucket
-    /// and (b) detecting a change in the interval so the count can be reset.
+    /// * `interval`: The interval will be used to set the TTL in the event that a new
+    /// bucket needs to be created for this key.
     ///
     /// returns: The current count (after being incremented), and the time the bucket resets.
     async fn get_and_increment(&self, key: &str, interval: Duration) -> (usize, Instant);
@@ -20,6 +20,5 @@ pub trait Backend: Clone {
     /// # Arguments
     ///
     /// * `key`: The rate limit key
-    /// * `interval`: The original interval is required to locate the correct bucket.
-    async fn decrement(&self, key: &str, interval: Duration);
+    async fn decrement(&self, key: &str);
 }

@@ -3,7 +3,7 @@ mod middleware;
 mod policy;
 
 pub use middleware::builder::RateLimiterBuilder;
-pub use middleware::RateLimiter;
+pub use middleware::{RateLimitStatus, RateLimiter};
 pub use policy::Policy;
 
 #[cfg(test)]

@@ -14,8 +14,7 @@ pub struct InMemoryBackend {
 }
 
 struct Value {
-    interval: Duration,
-    expiry: Instant,
+    ttl: Instant,
     count: usize,
 }
 
@@ -30,7 +29,7 @@ impl InMemoryBackend {
         actix_web::rt::spawn(async move {
             loop {
                 let now = Instant::now();
-                map.retain(|_k, v| v.expiry > now);
+                map.retain(|_k, v| v.ttl > now);
                 actix_web::rt::time::sleep_until((now + interval).into()).await;
             }
         })
@@ -48,29 +47,28 @@ impl Backend for InMemoryBackend {
         self.map
             .entry(key.to_string())
             .and_modify(|v| {
-                if v.expiry > now && v.interval == interval {
+                // If this bucket hasn't yet expired, increment and extract the count/expiry
+                if v.ttl > now {
                     v.count += 1;
                     count = v.count;
-                    expiry = v.expiry;
+                    expiry = v.ttl;
                 } else {
-                    v.expiry = expiry;
-                    v.interval = interval;
+                    // If this bucket has expired we will reset the count to 1 and set a new TTL.
+                    v.ttl = expiry;
                     v.count = count;
                 }
             })
             .or_insert_with(|| Value {
-                interval,
-                expiry,
+                // If the bucket doesn't exist, create it with a count of 1, and set the TTL.
+                ttl: expiry,
                 count,
             });
         (count, expiry)
     }
 
-    async fn decrement(&self, key: &str, interval: Duration) {
+    async fn decrement(&self, key: &str) {
         self.map.entry(key.to_string()).and_modify(|v| {
-            if v.interval == interval {
-                v.count -= 1;
-            }
+            v.count = v.count.saturating_sub(1);
         });
     }
 }
