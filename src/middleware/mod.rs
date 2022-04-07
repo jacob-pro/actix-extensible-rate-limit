@@ -1,7 +1,6 @@
 pub mod builder;
 
 use crate::backend::Backend;
-use crate::Policy;
 use actix_utils::future::{ok, Ready};
 use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
@@ -9,44 +8,27 @@ use actix_web::http::header::HeaderMap;
 use actix_web::HttpResponse;
 use builder::RateLimiterBuilder;
 use std::cell::RefCell;
-use std::time::Instant;
 use std::{future::Future, pin::Pin, rc::Rc};
 
-#[derive(Debug, Clone)]
-pub struct RateLimitStatus {
-    pub limit: usize,
-    pub remaining: usize,
-    pub reset: Instant,
-}
+type SuccessMutation<BO> = dyn Fn(&mut HeaderMap, Option<&BO>);
 
-impl RateLimitStatus {
-    /// Number of seconds from now until the limit resets.\
-    /// If the limit has already reset this will return 0.
-    pub fn seconds_until_reset(&self) -> u64 {
-        self.reset
-            .saturating_duration_since(Instant::now())
-            .as_secs()
-    }
-}
-
-type SuccessMutation = dyn Fn(&mut HeaderMap, Option<&RateLimitStatus>);
-
-type DeniedResponse = dyn Fn(&RateLimitStatus) -> HttpResponse;
+type DeniedResponse<BO> = dyn Fn(&BO) -> HttpResponse;
 
 /// Rate limit middleware.
-pub struct RateLimiter<BE, F> {
+pub struct RateLimiter<BE, BO, F> {
     backend: BE,
     policy_fn: Rc<F>,
     fail_open: bool,
-    allowed_mutation: Option<Rc<SuccessMutation>>,
-    denied_response: Rc<DeniedResponse>,
+    allowed_mutation: Option<Rc<SuccessMutation<BO>>>,
+    denied_response: Rc<DeniedResponse<BO>>,
 }
 
-impl<BE, F, O> Clone for RateLimiter<BE, F>
+impl<BE, BI, BO, F, O> Clone for RateLimiter<BE, BO, F>
 where
-    BE: Backend + 'static,
+    BE: Backend<BI> + 'static,
+    BI: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
-    O: Future<Output = Result<Policy, actix_web::Error>>,
+    O: Future<Output = Result<BI, actix_web::Error>>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -59,29 +41,32 @@ where
     }
 }
 
-impl<BE, F, O> RateLimiter<BE, F>
+impl<BE, BI, BO, F, O> RateLimiter<BE, BO, F>
 where
-    BE: Backend + 'static,
+    BE: Backend<BI, Output = BO> + 'static,
+    BI: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
-    O: Future<Output = Result<Policy, actix_web::Error>>,
+    O: Future<Output = Result<BI, actix_web::Error>>,
 {
-    pub fn builder(backend: BE, policy_fn: F) -> RateLimiterBuilder<BE, F> {
+    pub fn builder(backend: BE, policy_fn: F) -> RateLimiterBuilder<BE, BO, F> {
         RateLimiterBuilder::new(backend, policy_fn)
     }
 }
 
-impl<S, B, BE, F, O> Transform<S, ServiceRequest> for RateLimiter<BE, F>
+impl<S, B, BE, BI, BO, F, O> Transform<S, ServiceRequest> for RateLimiter<BE, BO, F>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
-    BE: Backend + 'static,
+    BE: Backend<BI, Output = BO> + 'static,
+    BI: 'static,
+    BO: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
-    O: Future<Output = Result<Policy, actix_web::Error>>,
+    O: Future<Output = Result<BI, actix_web::Error>>,
 {
     type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
-    type Transform = RateLimiterMiddleware<S, BE, F>;
+    type Transform = RateLimiterMiddleware<S, BE, BO, F>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
@@ -96,22 +81,24 @@ where
     }
 }
 
-pub struct RateLimiterMiddleware<S, BE, F> {
+pub struct RateLimiterMiddleware<S, BE, BO, F> {
     service: Rc<RefCell<S>>,
     backend: BE,
     policy_fn: Rc<F>,
-    allowed_mutation: Option<Rc<SuccessMutation>>,
-    denied_response: Rc<DeniedResponse>,
+    allowed_mutation: Option<Rc<SuccessMutation<BO>>>,
+    denied_response: Rc<DeniedResponse<BO>>,
 }
 
-impl<S, B, BE, F, O> Service<ServiceRequest> for RateLimiterMiddleware<S, BE, F>
+impl<S, B, BE, BI, BO, F, O> Service<ServiceRequest> for RateLimiterMiddleware<S, BE, BO, F>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
-    BE: Backend + 'static,
+    BE: Backend<BI, Output = BO> + 'static,
+    BI: 'static,
+    BO: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
-    O: Future<Output = Result<Policy, actix_web::Error>>,
+    O: Future<Output = Result<BI, actix_web::Error>>,
 {
     type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
@@ -127,33 +114,20 @@ where
         let denied_response = self.denied_response.clone();
 
         Box::pin(async move {
-            let policy: Policy = (policy_fn)(&req).await?;
-            let (count, ttl) = backend
-                .get_and_increment(&policy.key, policy.interval)
-                .await;
+            let input = (policy_fn)(&req).await?;
+            let (allow, output) = backend.request(input).await?;
 
-            if count > policy.max_requests {
-                let status = RateLimitStatus {
-                    limit: policy.max_requests,
-                    remaining: 0,
-                    reset: ttl,
-                };
-                let response: HttpResponse = (denied_response)(&status);
+            if !allow {
+                let response: HttpResponse = (denied_response)(&output);
                 return Ok(req.into_response(response).map_into_right_body());
             }
-
-            let status = RateLimitStatus {
-                limit: policy.max_requests,
-                remaining: policy.max_requests.saturating_sub(count),
-                reset: ttl,
-            };
 
             // The service can return either a ServiceResponse<UNKNOWN> or an actix_web:Error
             // In either case we still we may want to add the rate limiting headers.
             let service_response = match service.call(req).await {
                 Ok(mut service_response) => {
                     if let Some(mutation) = success_mutation {
-                        (mutation)(service_response.headers_mut(), Some(&status));
+                        (mutation)(service_response.headers_mut(), Some(&output));
                     }
                     service_response
                 }
@@ -161,7 +135,7 @@ where
                     // We need to dismantle and re-assemble the error
                     let mut err_response: HttpResponse = e.error_response();
                     if let Some(mutation) = success_mutation {
-                        (mutation)(err_response.headers_mut(), Some(&status));
+                        (mutation)(err_response.headers_mut(), Some(&output));
                     }
                     // TODO: Fix this
                     return Err(e);
@@ -176,7 +150,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::memory::InMemoryBackend;
+    use crate::backend::fixed_window::FixedWindowInput;
+    use crate::backend::memory::FixedWindowInMemory;
     use actix_web::http::StatusCode;
     use actix_web::test::TestRequest;
     use actix_web::{get, test, App, HttpResponse, Responder};
@@ -189,14 +164,15 @@ mod tests {
 
     #[actix_web::test]
     async fn test_index_get() {
-        let backend = InMemoryBackend::builder().build();
+        let backend = FixedWindowInMemory::builder().build();
         let limiter = RateLimiter::builder(backend, |_req| async {
-            Ok(Policy {
+            Ok(FixedWindowInput {
                 interval: Duration::from_secs(3600),
                 max_requests: 2,
                 key: "".to_string(),
             })
         })
+        .add_headers()
         .build();
         let app = test::init_service(App::new().service(success).wrap(limiter)).await;
         assert!(

@@ -1,9 +1,10 @@
 use crate::backend::Backend;
-use crate::middleware::{DeniedResponse, RateLimitStatus, RateLimiter, SuccessMutation};
+use crate::middleware::{DeniedResponse, RateLimiter, SuccessMutation};
 use actix_web::dev::ServiceRequest;
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use actix_web::HttpResponse;
 use once_cell::sync::Lazy;
+use std::future::Future;
 use std::rc::Rc;
 
 pub static X_RATELIMIT_LIMIT: Lazy<HeaderName> =
@@ -15,25 +16,27 @@ pub static X_RATELIMIT_REMAINING: Lazy<HeaderName> =
 pub static X_RATELIMIT_RESET: Lazy<HeaderName> =
     Lazy::new(|| HeaderName::from_static("x-ratelimit-reset"));
 
-pub struct RateLimiterBuilder<BE, F> {
+pub struct RateLimiterBuilder<BE, BO, F> {
     backend: BE,
     policy_fn: F,
     fail_open: bool,
-    allowed_mutation: Option<Rc<SuccessMutation>>,
-    denied_response: Rc<DeniedResponse>,
+    allowed_transformation: Option<Rc<SuccessMutation<BO>>>,
+    denied_response: Rc<DeniedResponse<BO>>,
 }
 
-impl<BE, F, O> RateLimiterBuilder<BE, F>
+impl<BE, BI, BO, F, O> RateLimiterBuilder<BE, BO, F>
 where
-    BE: Backend + 'static,
+    BE: Backend<BI, Output = BO> + 'static,
+    BI: 'static,
     F: Fn(&ServiceRequest) -> O,
+    O: Future<Output = Result<BI, actix_web::Error>>,
 {
     pub(super) fn new(backend: BE, policy_fn: F) -> Self {
         Self {
             backend,
             policy_fn,
             fail_open: false,
-            allowed_mutation: None,
+            allowed_transformation: None,
             denied_response: Rc::new(|_| HttpResponse::TooManyRequests().finish()),
         }
     }
@@ -44,21 +47,26 @@ where
         self
     }
 
-    /// Sets the [allowed_mutation()](RateLimiterBuilder::allowed_mutation) and
-    /// [denied_response()](RateLimiterBuilder::denied_response) functions, such that the
-    /// following headers are set in both the allowed and denied responses:
+    /// Sets the [RateLimiterBuilder::request_allowed_transformation] and
+    /// [RateLimiterBuilder::request_denied_response] functions, such that the following headers
+    /// are set in both the allowed and denied responses:
     ///
     /// - `x-ratelimit-limit`\
     /// - `x-ratelimit-remaining`\
     /// - `x-ratelimit-reset` (seconds until the reset)
-    /// - `Retry-After` (denied only, seconds until the reset)
-    pub fn add_headers(mut self) -> Self {
-        self.allowed_mutation = Some(Rc::new(|map, status| {
-            if let Some(status) = status {
-                map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit));
+    /// - `retry-after` (denied only, seconds until the reset)
+    ///
+    /// This function requires the Backend Output to implement [HeaderCompatibleOutput]
+    pub fn add_headers(mut self) -> Self
+    where
+        BO: HeaderCompatibleOutput,
+    {
+        self.allowed_transformation = Some(Rc::new(|map, output| {
+            if let Some(status) = output {
+                map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit()));
                 map.insert(
                     X_RATELIMIT_REMAINING.clone(),
-                    HeaderValue::from(status.remaining),
+                    HeaderValue::from(status.remaining()),
                 );
                 map.insert(
                     X_RATELIMIT_RESET.clone(),
@@ -69,10 +77,10 @@ where
         self.denied_response = Rc::new(|status| {
             let mut response = HttpResponse::TooManyRequests().finish();
             let map = response.headers_mut();
-            map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit));
+            map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit()));
             map.insert(
                 X_RATELIMIT_REMAINING.clone(),
-                HeaderValue::from(status.remaining),
+                HeaderValue::from(status.remaining()),
             );
             let seconds = status.seconds_until_reset();
             map.insert(X_RATELIMIT_RESET.clone(), HeaderValue::from(seconds));
@@ -88,33 +96,50 @@ where
     ///
     /// By default no changes are made to the response.
     ///
-    /// Note the [RateLimitStatus] will be [None] if the backend failed (and this was allowed).
-    pub fn allowed_mutation<M>(mut self, mutation: Option<M>) -> Self
+    /// Note the [Backend::Output] will be [None] if the backend failed and
+    /// [RateLimiterBuilder::fail_open] is enabled.
+    pub fn request_allowed_transformation<M>(mut self, mutation: Option<M>) -> Self
     where
-        M: Fn(&mut HeaderMap, Option<&RateLimitStatus>) + 'static,
+        M: Fn(&mut HeaderMap, Option<&BO>) + 'static,
     {
-        self.allowed_mutation = mutation.map(|m| Rc::new(m) as Rc<SuccessMutation>);
+        self.allowed_transformation = mutation.map(|m| Rc::new(m) as Rc<SuccessMutation<BO>>);
         self
     }
 
     /// In the event that the request is denied, configure the [HttpResponse] returned.
     ///
     /// This defaults to an empty body with status 429.
-    pub fn denied_response<R>(mut self, denied_response: R) -> Self
+    pub fn request_denied_response<R>(mut self, denied_response: R) -> Self
     where
-        R: Fn(&RateLimitStatus) -> HttpResponse + 'static,
+        R: Fn(&BO) -> HttpResponse + 'static,
     {
         self.denied_response = Rc::new(denied_response);
         self
     }
 
-    pub fn build(self) -> RateLimiter<BE, F> {
+    pub fn build(self) -> RateLimiter<BE, BO, F> {
         RateLimiter {
             backend: self.backend,
             policy_fn: Rc::new(self.policy_fn),
             fail_open: self.fail_open,
-            allowed_mutation: self.allowed_mutation,
+            allowed_mutation: self.allowed_transformation,
             denied_response: self.denied_response,
         }
     }
+}
+
+/// A trait that a [Backend::Output] should implement in order to use the
+/// [RateLimiterBuilder::add_headers] function.
+pub trait HeaderCompatibleOutput {
+    /// Value for the `x-ratelimit-limit` header.
+    fn limit(&self) -> u64;
+
+    /// Value for the `x-ratelimit-remaining` header.
+    fn remaining(&self) -> u64;
+
+    /// Value for the `x-ratelimit-reset` and `retry-at` headers.
+    ///
+    /// This should be the number of seconds from now until the limit resets.\
+    /// If the limit has already reset this should return 0.
+    fn seconds_until_reset(&self) -> u64;
 }

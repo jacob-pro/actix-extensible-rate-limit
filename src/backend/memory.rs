@@ -1,3 +1,4 @@
+use crate::backend::fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
 use crate::backend::Backend;
 use actix_web::rt::task::JoinHandle;
 use async_trait::async_trait;
@@ -8,19 +9,19 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_GC_INTERVAL_SECONDS: u64 = 60 * 10;
 
 #[derive(Clone)]
-pub struct InMemoryBackend {
+pub struct FixedWindowInMemory {
     map: Arc<DashMap<String, Value>>,
     gc_handle: Arc<JoinHandle<()>>,
 }
 
 struct Value {
     ttl: Instant,
-    count: usize,
+    count: u64,
 }
 
-impl InMemoryBackend {
-    pub fn builder() -> InMemoryBackendBuilder {
-        InMemoryBackendBuilder {
+impl FixedWindowInMemory {
+    pub fn builder() -> FixedWindowInMemoryBuilder {
+        FixedWindowInMemoryBuilder {
             gc_interval: Duration::from_secs(DEFAULT_GC_INTERVAL_SECONDS),
         }
     }
@@ -36,16 +37,18 @@ impl InMemoryBackend {
     }
 }
 
-#[async_trait]
-impl Backend for InMemoryBackend {
-    async fn get_and_increment(&self, key: &str, interval: Duration) -> (usize, Instant) {
+#[async_trait(?Send)]
+impl Backend<FixedWindowInput> for FixedWindowInMemory {
+    type Output = FixedWindowOutput;
+
+    async fn request(&self, input: FixedWindowInput) -> actix_web::Result<(bool, Self::Output)> {
         let now = Instant::now();
         let mut count = 1;
         let mut expiry = now
-            .checked_add(interval)
+            .checked_add(input.interval)
             .expect("Interval unexpectedly large");
         self.map
-            .entry(key.to_string())
+            .entry(input.key.clone())
             .and_modify(|v| {
                 // If this bucket hasn't yet expired, increment and extract the count/expiry
                 if v.ttl > now {
@@ -63,27 +66,43 @@ impl Backend for InMemoryBackend {
                 ttl: expiry,
                 count,
             });
-        (count, expiry)
+        let allow = count <= input.max_requests;
+        let output = FixedWindowOutput {
+            limit: input.max_requests,
+            remaining: input.max_requests.saturating_sub(count),
+            reset: expiry,
+            key: "".to_string(),
+        };
+        Ok((allow, output))
     }
 
-    async fn decrement(&self, key: &str) {
-        self.map.entry(key.to_string()).and_modify(|v| {
+    async fn rollback(&self, previous: Self::Output) -> actix_web::Result<()> {
+        self.map.entry(previous.key).and_modify(|v| {
             v.count = v.count.saturating_sub(1);
         });
+        Ok(())
     }
 }
 
-impl Drop for InMemoryBackend {
+#[async_trait(?Send)]
+impl FixedWindowBackend for FixedWindowInMemory {
+    async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.map.remove(key);
+        Ok(())
+    }
+}
+
+impl Drop for FixedWindowInMemory {
     fn drop(&mut self) {
         self.gc_handle.abort();
     }
 }
 
-pub struct InMemoryBackendBuilder {
+pub struct FixedWindowInMemoryBuilder {
     gc_interval: Duration,
 }
 
-impl InMemoryBackendBuilder {
+impl FixedWindowInMemoryBuilder {
     /// Override the default garbage collector interval.
     ///
     /// The garbage collector periodically scans the internal map, removing expired buckets.
@@ -92,12 +111,12 @@ impl InMemoryBackendBuilder {
         self
     }
 
-    pub fn build(self) -> InMemoryBackend {
+    pub fn build(self) -> FixedWindowInMemory {
         let map = Arc::new(DashMap::<String, Value>::new());
-        let gc_handle = Arc::new(InMemoryBackend::garbage_collector(
+        let gc_handle = Arc::new(FixedWindowInMemory::garbage_collector(
             map.clone(),
             self.gc_interval,
         ));
-        InMemoryBackend { map, gc_handle }
+        FixedWindowInMemory { map, gc_handle }
     }
 }
