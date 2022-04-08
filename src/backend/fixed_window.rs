@@ -3,6 +3,15 @@ use crate::middleware::builder::HeaderCompatibleOutput;
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 
+#[async_trait(?Send)]
+pub trait FixedWindowBackend: Backend<FixedWindowInput, Output = FixedWindowOutput> {
+    /// Removes the bucket for a given rate limit key.
+    ///
+    /// Intended to be used to reset a key before changing the interval.
+    async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+/// Input for a [FixedWindowBackend].
 pub struct FixedWindowInput {
     /// The rate limiting interval.
     pub interval: Duration,
@@ -12,9 +21,13 @@ pub struct FixedWindowInput {
     pub key: String,
 }
 
+/// Output from a [FixedWindowBackend].
 pub struct FixedWindowOutput {
+    /// Total number of requests that are permitted within the rate limit interval.
     pub limit: u64,
+    /// Number of requests that will be permitted until the limit resets.
     pub remaining: u64,
+    /// Time at which the rate limit resets.
     pub reset: Instant,
     /// The rate limit key (allows for a rollback).
     pub key: String,
@@ -34,12 +47,4 @@ impl HeaderCompatibleOutput for FixedWindowOutput {
             .saturating_duration_since(Instant::now())
             .as_secs()
     }
-}
-
-#[async_trait(?Send)]
-pub trait FixedWindowBackend: Backend<FixedWindowInput, Output = FixedWindowOutput> {
-    /// Removes the bucket for a given rate limit key.
-    ///
-    /// Intended to be used to reset a key before changing the interval.
-    async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>>;
 }

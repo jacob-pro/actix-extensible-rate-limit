@@ -1,5 +1,8 @@
-pub mod fixed_window;
-pub mod memory;
+mod fixed_window;
+mod memory;
+
+pub use fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
+pub use memory::{FixedWindowInMemory, FixedWindowInMemoryBuilder};
 
 use actix_web::Result;
 use async_trait::async_trait;

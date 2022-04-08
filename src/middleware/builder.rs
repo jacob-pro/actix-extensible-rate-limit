@@ -1,5 +1,5 @@
 use crate::backend::Backend;
-use crate::middleware::{DeniedResponse, RateLimiter, SuccessMutation};
+use crate::middleware::{AllowedTransformation, DeniedResponse, RateLimiter};
 use actix_web::dev::ServiceRequest;
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use actix_web::HttpResponse;
@@ -18,9 +18,9 @@ pub static X_RATELIMIT_RESET: Lazy<HeaderName> =
 
 pub struct RateLimiterBuilder<BE, BO, F> {
     backend: BE,
-    policy_fn: F,
+    input_fn: F,
     fail_open: bool,
-    allowed_transformation: Option<Rc<SuccessMutation<BO>>>,
+    allowed_transformation: Option<Rc<AllowedTransformation<BO>>>,
     denied_response: Rc<DeniedResponse<BO>>,
 }
 
@@ -31,17 +31,19 @@ where
     F: Fn(&ServiceRequest) -> O,
     O: Future<Output = Result<BI, actix_web::Error>>,
 {
-    pub(super) fn new(backend: BE, policy_fn: F) -> Self {
+    pub(super) fn new(backend: BE, input_fn: F) -> Self {
         Self {
             backend,
-            policy_fn,
+            input_fn,
             fail_open: false,
             allowed_transformation: None,
             denied_response: Rc::new(|_| HttpResponse::TooManyRequests().finish()),
         }
     }
 
-    /// Choose whether to allow a request if the backend returns a failure
+    /// Choose whether to allow a request if the backend returns a failure.
+    ///
+    /// Default is false.
     pub fn fail_open(mut self, fail_open: bool) -> Self {
         self.fail_open = fail_open;
         self
@@ -102,13 +104,13 @@ where
     where
         M: Fn(&mut HeaderMap, Option<&BO>) + 'static,
     {
-        self.allowed_transformation = mutation.map(|m| Rc::new(m) as Rc<SuccessMutation<BO>>);
+        self.allowed_transformation = mutation.map(|m| Rc::new(m) as Rc<AllowedTransformation<BO>>);
         self
     }
 
     /// In the event that the request is denied, configure the [HttpResponse] returned.
     ///
-    /// This defaults to an empty body with status 429.
+    /// Defaults to an empty body with status 429.
     pub fn request_denied_response<R>(mut self, denied_response: R) -> Self
     where
         R: Fn(&BO) -> HttpResponse + 'static,
@@ -120,7 +122,7 @@ where
     pub fn build(self) -> RateLimiter<BE, BO, F> {
         RateLimiter {
             backend: self.backend,
-            policy_fn: Rc::new(self.policy_fn),
+            input_fn: Rc::new(self.input_fn),
             fail_open: self.fail_open,
             allowed_mutation: self.allowed_transformation,
             denied_response: self.denied_response,

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_GC_INTERVAL_SECONDS: u64 = 60 * 10;
 
+/// A Fixed Window rate limiter [Backend] that uses [Dashmap](dashmap::DashMap) to store keys
+/// in memory.
 #[derive(Clone)]
 pub struct FixedWindowInMemory {
     map: Arc<DashMap<String, Value>>,
