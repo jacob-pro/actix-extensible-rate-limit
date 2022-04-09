@@ -29,8 +29,8 @@ pub struct FixedWindowOutput {
     pub remaining: u64,
     /// Time at which the rate limit resets.
     pub reset: Instant,
-    /// The rate limit key (allows for a rollback).
-    pub key: String,
+    /// The rate limit key used (allows for a rollback).
+    pub(crate) key: String,
 }
 
 impl HeaderCompatibleOutput for FixedWindowOutput {

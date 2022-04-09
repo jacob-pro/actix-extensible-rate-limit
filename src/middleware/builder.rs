@@ -1,7 +1,8 @@
 use crate::backend::Backend;
-use crate::middleware::{AllowedTransformation, DeniedResponse, RateLimiter};
+use crate::middleware::{AllowedTransformation, DeniedResponse, RateLimiter, RollbackCondition};
 use actix_web::dev::ServiceRequest;
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
+use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
 use once_cell::sync::Lazy;
 use std::future::Future;
@@ -22,6 +23,7 @@ pub struct RateLimiterBuilder<BE, BO, F> {
     fail_open: bool,
     allowed_transformation: Option<Rc<AllowedTransformation<BO>>>,
     denied_response: Rc<DeniedResponse<BO>>,
+    rollback_condition: Option<Rc<RollbackCondition>>,
 }
 
 impl<BE, BI, BO, F, O> RateLimiterBuilder<BE, BO, F>
@@ -38,6 +40,7 @@ where
             fail_open: false,
             allowed_transformation: None,
             denied_response: Rc::new(|_| HttpResponse::TooManyRequests().finish()),
+            rollback_condition: None,
         }
     }
 
@@ -119,6 +122,25 @@ where
         self
     }
 
+    /// After processing a request, attempt to rollback the request count based on the status code
+    /// of the returned response.
+    ///
+    /// By default the rate limit is never rolled back.
+    pub fn rollback_condition<C>(mut self, condition: Option<C>) -> Self
+    where
+        C: Fn(StatusCode) -> bool + 'static,
+    {
+        self.rollback_condition = condition.map(|m| Rc::new(m) as Rc<RollbackCondition>);
+        self
+    }
+
+    /// Configures the [RateLimiterBuilder::rollback_condition] to rollback if the status code
+    /// is a server error (5xx).
+    pub fn rollback_server_errors(mut self) -> Self {
+        self.rollback_condition = Some(Rc::new(|status| status.is_server_error()));
+        self
+    }
+
     pub fn build(self) -> RateLimiter<BE, BO, F> {
         RateLimiter {
             backend: self.backend,
@@ -126,6 +148,7 @@ where
             fail_open: self.fail_open,
             allowed_mutation: self.allowed_transformation,
             denied_response: self.denied_response,
+            rollback_condition: self.rollback_condition,
         }
     }
 }

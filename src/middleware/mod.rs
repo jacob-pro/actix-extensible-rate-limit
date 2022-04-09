@@ -5,15 +5,15 @@ use actix_utils::future::{ok, Ready};
 use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::header::HeaderMap;
-use actix_web::{HttpResponse, ResponseError};
+use actix_web::http::StatusCode;
+use actix_web::HttpResponse;
 use builder::RateLimiterBuilder;
 use std::cell::RefCell;
-use std::fmt::{Debug, Display, Formatter};
 use std::{future::Future, pin::Pin, rc::Rc};
 
 type AllowedTransformation<BO> = dyn Fn(&mut HeaderMap, Option<&BO>);
-
 type DeniedResponse<BO> = dyn Fn(&BO) -> HttpResponse;
+type RollbackCondition = dyn Fn(StatusCode) -> bool;
 
 /// Rate limit middleware.
 pub struct RateLimiter<BE, BO, F> {
@@ -22,6 +22,7 @@ pub struct RateLimiter<BE, BO, F> {
     fail_open: bool,
     allowed_mutation: Option<Rc<AllowedTransformation<BO>>>,
     denied_response: Rc<DeniedResponse<BO>>,
+    rollback_condition: Option<Rc<RollbackCondition>>,
 }
 
 impl<BE, BI, BO, F, O> Clone for RateLimiter<BE, BO, F>
@@ -38,6 +39,7 @@ where
             fail_open: self.fail_open,
             allowed_mutation: self.allowed_mutation.clone(),
             denied_response: self.denied_response.clone(),
+            rollback_condition: self.rollback_condition.clone(),
         }
     }
 }
@@ -83,6 +85,7 @@ where
             fail_open: self.fail_open,
             allowed_transformation: self.allowed_mutation.clone(),
             denied_response: self.denied_response.clone(),
+            rollback_condition: self.rollback_condition.clone(),
         })
     }
 }
@@ -94,6 +97,7 @@ pub struct RateLimiterMiddleware<S, BE, BO, F> {
     fail_open: bool,
     allowed_transformation: Option<Rc<AllowedTransformation<BO>>>,
     denied_response: Rc<DeniedResponse<BO>>,
+    rollback_condition: Option<Rc<RollbackCondition>>,
 }
 
 impl<S, B, BE, BI, BO, F, O> Service<ServiceRequest> for RateLimiterMiddleware<S, BE, BO, F>
@@ -109,17 +113,19 @@ where
 {
     type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
+    #[allow(clippy::type_complexity)]
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let service = Rc::clone(&self.service);
+        let service = self.service.clone();
         let backend = self.backend.clone();
-        let input_fn = Rc::clone(&self.input_fn);
+        let input_fn = self.input_fn.clone();
         let fail_open = self.fail_open;
         let allowed_transformation = self.allowed_transformation.clone();
         let denied_response = self.denied_response.clone();
+        let rollback_condition = self.rollback_condition.clone();
 
         Box::pin(async move {
             let input = (input_fn)(&req).await?;
@@ -145,58 +151,26 @@ where
                 }
             };
 
-            // Here we allow the request through to the service
-            // The service can return either a ServiceResponse<UNKNOWN> or an actix_web:Error
-            // In either case we still we will transform the result
-            let service_response = match service.call(req).await {
-                Ok(mut service_response) => {
-                    if let Some(transformation) = allowed_transformation {
-                        (transformation)(service_response.headers_mut(), output.as_ref());
-                    }
-                    service_response
-                }
-                Err(e) => {
-                    return if let Some(transformation) = allowed_transformation {
-                        Err(TransformedError {
-                            output,
-                            transformation,
-                            inner: e,
-                        }
-                        .into())
-                    } else {
-                        Err(e)
+            let mut service_response = service.call(req).await?;
+
+            if let Some(transformation) = allowed_transformation {
+                (transformation)(service_response.headers_mut(), output.as_ref());
+            }
+
+            // Can only rollback if the rate limiter was working in the first place.
+            if let Some(output) = output {
+                if let Some(rollback_condition) = rollback_condition {
+                    let status = service_response.status();
+                    if rollback_condition(status) {
+                        if let Err(e) = backend.rollback(output).await {
+                            log::error!("Unable to rollback rate-limit count for response with code: {status}, error: {e}");
+                        };
                     }
                 }
-            };
+            }
 
             Ok(ServiceResponse::map_into_left_body(service_response))
         })
-    }
-}
-
-struct TransformedError<BO> {
-    output: Option<BO>,
-    transformation: Rc<AllowedTransformation<BO>>,
-    inner: actix_web::Error,
-}
-
-impl<BO> Display for TransformedError<BO> {
-    fn fmt(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
-        unreachable!()
-    }
-}
-
-impl<BO> Debug for TransformedError<BO> {
-    fn fmt(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
-        unreachable!()
-    }
-}
-
-impl<BO> ResponseError for TransformedError<BO> {
-    fn error_response(&self) -> HttpResponse {
-        let mut inner: HttpResponse = self.inner.error_response();
-        (self.transformation)(inner.headers_mut(), self.output.as_ref());
-        inner
     }
 }
 
