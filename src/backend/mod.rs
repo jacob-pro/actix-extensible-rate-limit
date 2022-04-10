@@ -1,7 +1,13 @@
+#[cfg(feature = "dashmap")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
 mod fixed_window;
+#[cfg(feature = "dashmap")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
 mod memory;
 
+#[cfg(feature = "dashmap")]
 pub use fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
+#[cfg(feature = "dashmap")]
 pub use memory::{FixedWindowInMemory, FixedWindowInMemoryBuilder};
 
 use actix_web::Result;
