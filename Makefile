@@ -3,7 +3,7 @@
 test:
 	cargo fmt -- --check
 	cargo-sort --check --workspace
-	cargo clippy --all-features --workspace
+	cargo clippy --all-features --workspace -- -D warnings
 	cargo test --all-features --workspace
 
 format:

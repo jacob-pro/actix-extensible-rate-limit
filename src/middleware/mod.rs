@@ -3,16 +3,16 @@ pub mod builder;
 mod tests;
 
 use crate::backend::Backend;
-use actix_utils::future::{ok, Ready};
 use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::header::HeaderMap;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, ResponseError};
 use builder::RateLimiterBuilder;
+use futures::future::{ok, LocalBoxFuture, Ready};
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
-use std::{future::Future, pin::Pin, rc::Rc};
+use std::{future::Future, rc::Rc};
 
 type AllowedTransformation<BO> = dyn Fn(&mut HeaderMap, Option<&BO>, bool);
 type DeniedResponse<BO> = dyn Fn(&BO) -> HttpResponse;
@@ -116,8 +116,7 @@ where
 {
     type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
-    #[allow(clippy::type_complexity)]
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     forward_ready!(service);
 

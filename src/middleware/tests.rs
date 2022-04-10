@@ -295,8 +295,8 @@ mod broken_middleware {
         dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
         Error,
     };
-    use std::future::{ready, Future, Ready};
-    use std::pin::Pin;
+    use futures::future::LocalBoxFuture;
+    use std::future::{ready, Ready};
 
     // A Middleware that allows us to test what happens when the service.call returns an error
     pub struct Broken(pub(super) MockError);
@@ -334,7 +334,7 @@ mod broken_middleware {
     {
         type Response = ServiceResponse<B>;
         type Error = Error;
-        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+        type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         forward_ready!(service);
 
