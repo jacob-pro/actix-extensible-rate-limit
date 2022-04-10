@@ -136,9 +136,8 @@ where
 
     /// Configures the [RateLimiterBuilder::rollback_condition] to rollback if the status code
     /// is a server error (5xx).
-    pub fn rollback_server_errors(mut self) -> Self {
-        self.rollback_condition = Some(Rc::new(|status| status.is_server_error()));
-        self
+    pub fn rollback_server_errors(self) -> Self {
+        self.rollback_condition(Some(|status: StatusCode| status.is_server_error()))
     }
 
     pub fn build(self) -> RateLimiter<BE, BO, F> {

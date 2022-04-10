@@ -1,4 +1,6 @@
 pub mod builder;
+#[cfg(test)]
+mod tests;
 
 use crate::backend::Backend;
 use actix_utils::future::{ok, Ready};
@@ -171,54 +173,5 @@ where
 
             Ok(ServiceResponse::map_into_left_body(service_response))
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::FixedWindowInMemory;
-    use crate::backend::FixedWindowInput;
-    use actix_web::http::StatusCode;
-    use actix_web::test::TestRequest;
-    use actix_web::{get, test, App, HttpResponse, Responder};
-    use std::time::Duration;
-
-    #[get("/")]
-    async fn success() -> impl Responder {
-        HttpResponse::Ok().body("Hello world!")
-    }
-
-    #[actix_web::test]
-    async fn test_index_get() {
-        let backend = FixedWindowInMemory::builder().build();
-        let limiter = RateLimiter::builder(backend, |_req| async {
-            Ok(FixedWindowInput {
-                interval: Duration::from_secs(3600),
-                max_requests: 2,
-                key: "".to_string(),
-            })
-        })
-        .add_headers()
-        .build();
-        let app = test::init_service(App::new().service(success).wrap(limiter)).await;
-        assert!(
-            test::call_service(&app, TestRequest::default().to_request())
-                .await
-                .status()
-                .is_success()
-        );
-        assert!(
-            test::call_service(&app, TestRequest::default().to_request())
-                .await
-                .status()
-                .is_success()
-        );
-        assert_eq!(
-            test::call_service(&app, TestRequest::default().to_request())
-                .await
-                .status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
     }
 }

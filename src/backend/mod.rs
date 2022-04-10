@@ -7,6 +7,9 @@ pub use memory::{FixedWindowInMemory, FixedWindowInMemoryBuilder};
 use actix_web::Result;
 use async_trait::async_trait;
 
+/// To implement your own rate limiting backend it is recommended to use
+/// [async_trait](https://github.com/dtolnay/async-trait), and add the `#[async_trait(?Send)]`
+/// attribute onto your trait implementation.
 #[async_trait(?Send)]
 pub trait Backend<I: 'static>: Clone {
     type Output;
