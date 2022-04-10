@@ -42,8 +42,12 @@ impl FixedWindowInMemory {
 #[async_trait(?Send)]
 impl Backend<FixedWindowInput> for FixedWindowInMemory {
     type Output = FixedWindowOutput;
+    type RollbackToken = String;
 
-    async fn request(&self, input: FixedWindowInput) -> actix_web::Result<(bool, Self::Output)> {
+    async fn request(
+        &self,
+        input: FixedWindowInput,
+    ) -> actix_web::Result<(bool, Self::Output, Self::RollbackToken)> {
         let now = Instant::now();
         let mut count = 1;
         let mut expiry = now
@@ -73,13 +77,12 @@ impl Backend<FixedWindowInput> for FixedWindowInMemory {
             limit: input.max_requests,
             remaining: input.max_requests.saturating_sub(count),
             reset: expiry,
-            key: "".to_string(),
         };
-        Ok((allow, output))
+        Ok((allow, output, input.key))
     }
 
-    async fn rollback(&self, previous: Self::Output) -> actix_web::Result<()> {
-        self.map.entry(previous.key).and_modify(|v| {
+    async fn rollback(&self, token: Self::RollbackToken) -> actix_web::Result<()> {
+        self.map.entry(token).and_modify(|v| {
             v.count = v.count.saturating_sub(1);
         });
         Ok(())

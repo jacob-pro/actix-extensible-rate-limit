@@ -66,13 +66,15 @@ where
     where
         BO: HeaderCompatibleOutput,
     {
-        self.allowed_transformation = Some(Rc::new(|map, output| {
+        self.allowed_transformation = Some(Rc::new(|map, output, rolled_back| {
             if let Some(status) = output {
                 map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit()));
-                map.insert(
-                    X_RATELIMIT_REMAINING.clone(),
-                    HeaderValue::from(status.remaining()),
-                );
+                let remaining = if rolled_back {
+                    status.remaining() + 1
+                } else {
+                    status.remaining()
+                };
+                map.insert(X_RATELIMIT_REMAINING.clone(), HeaderValue::from(remaining));
                 map.insert(
                     X_RATELIMIT_RESET.clone(),
                     HeaderValue::from(status.seconds_until_reset()),
@@ -103,9 +105,12 @@ where
     ///
     /// Note the [Backend::Output] will be [None] if the backend failed and
     /// [RateLimiterBuilder::fail_open] is enabled.
+    ///
+    /// The boolean parameter indicates if the rate limit was rolled back (so the remaining
+    /// request count can be adjusted).
     pub fn request_allowed_transformation<M>(mut self, mutation: Option<M>) -> Self
     where
-        M: Fn(&mut HeaderMap, Option<&BO>) + 'static,
+        M: Fn(&mut HeaderMap, Option<&BO>, bool) + 'static,
     {
         self.allowed_transformation = mutation.map(|m| Rc::new(m) as Rc<AllowedTransformation<BO>>);
         self
@@ -122,13 +127,16 @@ where
         self
     }
 
-    /// After processing a request, attempt to rollback the request count based on the status code
-    /// of the returned response.
+    /// After processing a request, attempt to rollback the request count based on the status
+    /// of the service response.
+    ///
+    /// The status is a result, because if a middleware further down the chain failed then
+    /// the service call returns an error.
     ///
     /// By default the rate limit is never rolled back.
     pub fn rollback_condition<C>(mut self, condition: Option<C>) -> Self
     where
-        C: Fn(StatusCode) -> bool + 'static,
+        C: Fn(Result<StatusCode, &actix_web::Error>) -> bool + 'static,
     {
         self.rollback_condition = condition.map(|m| Rc::new(m) as Rc<RollbackCondition>);
         self
@@ -136,8 +144,18 @@ where
 
     /// Configures the [RateLimiterBuilder::rollback_condition] to rollback if the status code
     /// is a server error (5xx).
+    ///
+    /// # Warning
+    ///
+    /// This assumes that all your middleware errors correctly implement
+    /// [ResponseError::status_code()](actix_web::ResponseError::status_code).
     pub fn rollback_server_errors(self) -> Self {
-        self.rollback_condition(Some(|status: StatusCode| status.is_server_error()))
+        self.rollback_condition(Some(
+            |status: Result<StatusCode, &actix_web::Error>| match status {
+                Ok(s) => s.is_server_error(),
+                Err(e) => e.as_response_error().status_code().is_server_error(),
+            },
+        ))
     }
 
     pub fn build(self) -> RateLimiter<BE, BO, F> {

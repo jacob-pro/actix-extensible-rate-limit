@@ -7,21 +7,29 @@ pub use memory::{FixedWindowInMemory, FixedWindowInMemoryBuilder};
 use actix_web::Result;
 use async_trait::async_trait;
 
+/// Describes an implementation of a rate limiting store and algorithm.
+///
 /// To implement your own rate limiting backend it is recommended to use
 /// [async_trait](https://github.com/dtolnay/async-trait), and add the `#[async_trait(?Send)]`
 /// attribute onto your trait implementation.
+///
+/// A Backend is required to implement [Clone], usually this means wrapping your data within an
+/// [Arc](std::sync::Arc), although many connection pools already do so internally so there is no
+/// need to wrap it twice.
 #[async_trait(?Send)]
 pub trait Backend<I: 'static>: Clone {
     type Output;
+    type RollbackToken;
 
     /// Process an incoming request.
     ///
     /// The input could include such things as a rate limit key, and the rate limit policy to be
     /// applied.
     ///
-    /// Returns a boolean of whether to allow the request, and also can also return arbitrary output
-    /// that can be used to transform the response, or rollback this operation.
-    async fn request(&self, input: I) -> Result<(bool, Self::Output)>;
+    /// Returns a boolean of whether to allow or deny the request, arbitrary output that can be used
+    /// to transform the allowed and denied responses, and a token to allow the rate limit counter
+    /// to be rolled back in certain conditions.
+    async fn request(&self, input: I) -> Result<(bool, Self::Output, Self::RollbackToken)>;
 
     /// Under certain conditions we may not want to rollback the request operation.
     ///
@@ -34,6 +42,6 @@ pub trait Backend<I: 'static>: Clone {
     ///
     /// # Arguments
     ///
-    /// * `previous`: The output of the [request()](Backend::request()).
-    async fn rollback(&self, previous: Self::Output) -> Result<()>;
+    /// * `token`: The token returned from the initial call to [Backend::request()].
+    async fn rollback(&self, token: Self::RollbackToken) -> Result<()>;
 }
