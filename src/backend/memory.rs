@@ -1,10 +1,11 @@
 use crate::backend::fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
 use crate::backend::Backend;
 use actix_web::rt::task::JoinHandle;
+use actix_web::rt::time::Instant;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const DEFAULT_GC_INTERVAL_SECONDS: u64 = 60 * 10;
 
@@ -13,7 +14,7 @@ pub const DEFAULT_GC_INTERVAL_SECONDS: u64 = 60 * 10;
 #[derive(Clone)]
 pub struct FixedWindowInMemory {
     map: Arc<DashMap<String, Value>>,
-    gc_handle: Arc<JoinHandle<()>>,
+    gc_handle: Option<Arc<JoinHandle<()>>>,
 }
 
 struct Value {
@@ -24,16 +25,20 @@ struct Value {
 impl FixedWindowInMemory {
     pub fn builder() -> FixedWindowInMemoryBuilder {
         FixedWindowInMemoryBuilder {
-            gc_interval: Duration::from_secs(DEFAULT_GC_INTERVAL_SECONDS),
+            gc_interval: Some(Duration::from_secs(DEFAULT_GC_INTERVAL_SECONDS)),
         }
     }
 
     fn garbage_collector(map: Arc<DashMap<String, Value>>, interval: Duration) -> JoinHandle<()> {
+        assert!(
+            interval.as_secs_f64() > 0f64,
+            "GC interval must be non-zero"
+        );
         actix_web::rt::spawn(async move {
             loop {
                 let now = Instant::now();
                 map.retain(|_k, v| v.ttl > now);
-                actix_web::rt::time::sleep_until((now + interval).into()).await;
+                actix_web::rt::time::sleep_until(now + interval).await;
             }
         })
     }
@@ -99,29 +104,184 @@ impl FixedWindowBackend for FixedWindowInMemory {
 
 impl Drop for FixedWindowInMemory {
     fn drop(&mut self) {
-        self.gc_handle.abort();
+        if let Some(handle) = &self.gc_handle {
+            handle.abort();
+        }
     }
 }
 
 pub struct FixedWindowInMemoryBuilder {
-    gc_interval: Duration,
+    gc_interval: Option<Duration>,
 }
 
 impl FixedWindowInMemoryBuilder {
     /// Override the default garbage collector interval.
     ///
+    /// Set to None to disable garbage collection.
+    ///
     /// The garbage collector periodically scans the internal map, removing expired buckets.
-    pub fn with_gc_interval(mut self, interval: Duration) -> Self {
+    pub fn with_gc_interval(mut self, interval: Option<Duration>) -> Self {
         self.gc_interval = interval;
         self
     }
 
     pub fn build(self) -> FixedWindowInMemory {
         let map = Arc::new(DashMap::<String, Value>::new());
-        let gc_handle = Arc::new(FixedWindowInMemory::garbage_collector(
-            map.clone(),
-            self.gc_interval,
-        ));
+        let gc_handle = self.gc_interval.map(|gc_interval| {
+            Arc::new(FixedWindowInMemory::garbage_collector(
+                map.clone(),
+                gc_interval,
+            ))
+        });
         FixedWindowInMemory { map, gc_handle }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINUTE: Duration = Duration::from_secs(60);
+
+    #[actix_web::test]
+    async fn test_allow_deny() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder().build();
+        let input = FixedWindowInput {
+            interval: MINUTE,
+            max_requests: 5,
+            key: "KEY1".to_string(),
+        };
+        for _ in 0..5 {
+            // First 5 should be allowed
+            let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+            assert!(allow);
+        }
+        // Sixth should be denied
+        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(!allow);
+    }
+
+    #[actix_web::test]
+    async fn test_reset() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder()
+            .with_gc_interval(None)
+            .build();
+        let input = FixedWindowInput {
+            interval: MINUTE,
+            max_requests: 1,
+            key: "KEY1".to_string(),
+        };
+        // Make first request, should be allowed
+        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(allow);
+        // Request again, should be denied
+        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(!allow);
+        // Advance time and try again, should now be allowed
+        tokio::time::advance(MINUTE).await;
+        // We want to be sure the key hasn't been garbage collected, and we are testing the expiry logic
+        assert!(backend.map.contains_key("KEY1"));
+        let (allow, _, _) = backend.request(input).await.unwrap();
+        assert!(allow);
+    }
+
+    #[actix_web::test]
+    async fn test_garbage_collection() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder()
+            .with_gc_interval(Some(MINUTE))
+            .build();
+        backend
+            .request(FixedWindowInput {
+                interval: MINUTE,
+                max_requests: 1,
+                key: "KEY1".to_string(),
+            })
+            .await
+            .unwrap();
+        backend
+            .request(FixedWindowInput {
+                interval: MINUTE * 2,
+                max_requests: 1,
+                key: "KEY2".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(backend.map.contains_key("KEY1"));
+        assert!(backend.map.contains_key("KEY2"));
+        // Advance time such that the garbage collector runs,
+        // expired KEY1 should be cleaned, but KEY2 should remain.
+        tokio::time::advance(MINUTE).await;
+        assert!(!backend.map.contains_key("KEY1"));
+        assert!(backend.map.contains_key("KEY2"));
+    }
+
+    #[actix_web::test]
+    async fn test_output() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder().build();
+        let input = FixedWindowInput {
+            interval: MINUTE,
+            max_requests: 2,
+            key: "KEY1".to_string(),
+        };
+        // First of 2 should be allowed.
+        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(allow);
+        assert_eq!(output.remaining, 1);
+        assert_eq!(output.limit, 2);
+        assert_eq!(output.reset, Instant::now() + MINUTE);
+        // Second of 2 should be allowed.
+        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(allow);
+        assert_eq!(output.remaining, 0);
+        assert_eq!(output.limit, 2);
+        assert_eq!(output.reset, Instant::now() + MINUTE);
+        // Should be denied
+        let (allow, output, _) = backend.request(input).await.unwrap();
+        assert!(!allow);
+        assert_eq!(output.remaining, 0);
+        assert_eq!(output.limit, 2);
+        assert_eq!(output.reset, Instant::now() + MINUTE);
+    }
+
+    #[actix_web::test]
+    async fn test_rollback() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder().build();
+        let input = FixedWindowInput {
+            interval: MINUTE,
+            max_requests: 5,
+            key: "KEY1".to_string(),
+        };
+        let (_, output, rollback) = backend.request(input.clone()).await.unwrap();
+        assert_eq!(output.remaining, 4);
+        backend.rollback(rollback).await.unwrap();
+        // Remaining requests should still be the same, since the previous call was excluded
+        let (_, output, _) = backend.request(input).await.unwrap();
+        assert_eq!(output.remaining, 4);
+    }
+
+    #[actix_web::test]
+    async fn test_remove_key() {
+        tokio::time::pause();
+        let backend = FixedWindowInMemory::builder()
+            .with_gc_interval(None)
+            .build();
+        let input = FixedWindowInput {
+            interval: MINUTE,
+            max_requests: 1,
+            key: "KEY1".to_string(),
+        };
+        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(allow);
+        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(!allow);
+        backend.remove_key("KEY1").await.unwrap();
+        // Counter should have been reset
+        let (allow, _, _) = backend.request(input).await.unwrap();
+        assert!(allow);
     }
 }

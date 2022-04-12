@@ -16,6 +16,9 @@ once_cell = "1.10.0"
 [features]
 default = ["dashmap"]
 
+[dev-dependencies]
+tokio = { version = "1", features = ["time", "test-util"] }
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

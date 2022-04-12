@@ -1,11 +1,8 @@
-#[cfg(feature = "dashmap")]
-#[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
 mod fixed_window;
 #[cfg(feature = "dashmap")]
 #[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
 mod memory;
 
-#[cfg(feature = "dashmap")]
 pub use fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
 #[cfg(feature = "dashmap")]
 pub use memory::{FixedWindowInMemory, FixedWindowInMemoryBuilder};
@@ -19,8 +16,8 @@ use async_trait::async_trait;
 /// [async_trait](https://github.com/dtolnay/async-trait), and add the `#[async_trait(?Send)]`
 /// attribute onto your trait implementation.
 ///
-/// A Backend is required to implement [Clone], usually this means wrapping your data within an
-/// [Arc](std::sync::Arc), although many connection pools already do so internally so there is no
+/// A Backend is required to implement [Clone], usually this means wrapping your data store within
+/// an [Arc](std::sync::Arc), although many connection pools already do so internally; there is no
 /// need to wrap it twice.
 #[async_trait(?Send)]
 pub trait Backend<I: 'static>: Clone {
