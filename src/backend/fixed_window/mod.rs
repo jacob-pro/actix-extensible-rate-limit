@@ -4,6 +4,15 @@ use actix_web::rt::time::Instant;
 use async_trait::async_trait;
 use std::time::Duration;
 
+mod input_builder;
+#[cfg(feature = "dashmap")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
+mod memory;
+
+pub use input_builder::SimpleInputFunctionBuilder;
+#[cfg(feature = "dashmap")]
+pub use memory::{InMemoryBackend, InMemoryBackendBuilder};
+
 #[async_trait(?Send)]
 pub trait FixedWindowBackend: Backend<FixedWindowInput, Output = FixedWindowOutput> {
     /// Removes the bucket for a given rate limit key.

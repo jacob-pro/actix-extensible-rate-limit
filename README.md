@@ -13,3 +13,9 @@ Allows for:
 - Setting a custom 429 response.
 - Transforming the response headers based on rate limit results (e.g `x-ratelimit-remaining`).
 - Rolling back rate limit counts based on response codes.
+
+## Provided Backends
+
+| Backend                       | Algorithm    | Store                                          |
+|-------------------------------|--------------|------------------------------------------------|
+| fixed_window::InMemoryBackend | Fixed Window | [Dashmap](https://github.com/xacrimon/dashmap) |

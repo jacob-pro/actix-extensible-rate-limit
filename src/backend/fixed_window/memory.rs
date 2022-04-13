@@ -12,7 +12,7 @@ pub const DEFAULT_GC_INTERVAL_SECONDS: u64 = 60 * 10;
 /// A Fixed Window rate limiter [Backend] that uses [Dashmap](dashmap::DashMap) to store keys
 /// in memory.
 #[derive(Clone)]
-pub struct FixedWindowInMemory {
+pub struct InMemoryBackend {
     map: Arc<DashMap<String, Value>>,
     gc_handle: Option<Arc<JoinHandle<()>>>,
 }
@@ -22,9 +22,9 @@ struct Value {
     count: u64,
 }
 
-impl FixedWindowInMemory {
-    pub fn builder() -> FixedWindowInMemoryBuilder {
-        FixedWindowInMemoryBuilder {
+impl InMemoryBackend {
+    pub fn builder() -> InMemoryBackendBuilder {
+        InMemoryBackendBuilder {
             gc_interval: Some(Duration::from_secs(DEFAULT_GC_INTERVAL_SECONDS)),
         }
     }
@@ -45,7 +45,7 @@ impl FixedWindowInMemory {
 }
 
 #[async_trait(?Send)]
-impl Backend<FixedWindowInput> for FixedWindowInMemory {
+impl Backend<FixedWindowInput> for InMemoryBackend {
     type Output = FixedWindowOutput;
     type RollbackToken = String;
 
@@ -95,14 +95,14 @@ impl Backend<FixedWindowInput> for FixedWindowInMemory {
 }
 
 #[async_trait(?Send)]
-impl FixedWindowBackend for FixedWindowInMemory {
+impl FixedWindowBackend for InMemoryBackend {
     async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.map.remove(key);
         Ok(())
     }
 }
 
-impl Drop for FixedWindowInMemory {
+impl Drop for InMemoryBackend {
     fn drop(&mut self) {
         if let Some(handle) = &self.gc_handle {
             handle.abort();
@@ -110,11 +110,11 @@ impl Drop for FixedWindowInMemory {
     }
 }
 
-pub struct FixedWindowInMemoryBuilder {
+pub struct InMemoryBackendBuilder {
     gc_interval: Option<Duration>,
 }
 
-impl FixedWindowInMemoryBuilder {
+impl InMemoryBackendBuilder {
     /// Override the default garbage collector interval.
     ///
     /// Set to None to disable garbage collection.
@@ -125,15 +125,12 @@ impl FixedWindowInMemoryBuilder {
         self
     }
 
-    pub fn build(self) -> FixedWindowInMemory {
+    pub fn build(self) -> InMemoryBackend {
         let map = Arc::new(DashMap::<String, Value>::new());
         let gc_handle = self.gc_interval.map(|gc_interval| {
-            Arc::new(FixedWindowInMemory::garbage_collector(
-                map.clone(),
-                gc_interval,
-            ))
+            Arc::new(InMemoryBackend::garbage_collector(map.clone(), gc_interval))
         });
-        FixedWindowInMemory { map, gc_handle }
+        InMemoryBackend { map, gc_handle }
     }
 }
 
@@ -146,7 +143,7 @@ mod tests {
     #[actix_web::test]
     async fn test_allow_deny() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder().build();
+        let backend = InMemoryBackend::builder().build();
         let input = FixedWindowInput {
             interval: MINUTE,
             max_requests: 5,
@@ -165,9 +162,7 @@ mod tests {
     #[actix_web::test]
     async fn test_reset() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder()
-            .with_gc_interval(None)
-            .build();
+        let backend = InMemoryBackend::builder().with_gc_interval(None).build();
         let input = FixedWindowInput {
             interval: MINUTE,
             max_requests: 1,
@@ -190,7 +185,7 @@ mod tests {
     #[actix_web::test]
     async fn test_garbage_collection() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder()
+        let backend = InMemoryBackend::builder()
             .with_gc_interval(Some(MINUTE))
             .build();
         backend
@@ -221,7 +216,7 @@ mod tests {
     #[actix_web::test]
     async fn test_output() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder().build();
+        let backend = InMemoryBackend::builder().build();
         let input = FixedWindowInput {
             interval: MINUTE,
             max_requests: 2,
@@ -250,7 +245,7 @@ mod tests {
     #[actix_web::test]
     async fn test_rollback() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder().build();
+        let backend = InMemoryBackend::builder().build();
         let input = FixedWindowInput {
             interval: MINUTE,
             max_requests: 5,
@@ -267,9 +262,7 @@ mod tests {
     #[actix_web::test]
     async fn test_remove_key() {
         tokio::time::pause();
-        let backend = FixedWindowInMemory::builder()
-            .with_gc_interval(None)
-            .build();
+        let backend = InMemoryBackend::builder().with_gc_interval(None).build();
         let input = FixedWindowInput {
             interval: MINUTE,
             max_requests: 1,
