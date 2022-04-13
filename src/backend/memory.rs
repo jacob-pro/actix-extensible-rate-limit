@@ -1,5 +1,4 @@
-use crate::backend::fixed_window::{FixedWindowBackend, FixedWindowInput, FixedWindowOutput};
-use crate::backend::Backend;
+use crate::backend::{Backend, SimpleBackend, SimpleInput, SimpleOutput};
 use actix_web::rt::task::JoinHandle;
 use actix_web::rt::time::Instant;
 use async_trait::async_trait;
@@ -45,13 +44,13 @@ impl InMemoryBackend {
 }
 
 #[async_trait(?Send)]
-impl Backend<FixedWindowInput> for InMemoryBackend {
-    type Output = FixedWindowOutput;
+impl Backend<SimpleInput> for InMemoryBackend {
+    type Output = SimpleOutput;
     type RollbackToken = String;
 
     async fn request(
         &self,
-        input: FixedWindowInput,
+        input: SimpleInput,
     ) -> actix_web::Result<(bool, Self::Output, Self::RollbackToken)> {
         let now = Instant::now();
         let mut count = 1;
@@ -78,7 +77,7 @@ impl Backend<FixedWindowInput> for InMemoryBackend {
                 count,
             });
         let allow = count <= input.max_requests;
-        let output = FixedWindowOutput {
+        let output = SimpleOutput {
             limit: input.max_requests,
             remaining: input.max_requests.saturating_sub(count),
             reset: expiry,
@@ -95,7 +94,7 @@ impl Backend<FixedWindowInput> for InMemoryBackend {
 }
 
 #[async_trait(?Send)]
-impl FixedWindowBackend for InMemoryBackend {
+impl SimpleBackend for InMemoryBackend {
     async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.map.remove(key);
         Ok(())
@@ -144,7 +143,7 @@ mod tests {
     async fn test_allow_deny() {
         tokio::time::pause();
         let backend = InMemoryBackend::builder().build();
-        let input = FixedWindowInput {
+        let input = SimpleInput {
             interval: MINUTE,
             max_requests: 5,
             key: "KEY1".to_string(),
@@ -163,7 +162,7 @@ mod tests {
     async fn test_reset() {
         tokio::time::pause();
         let backend = InMemoryBackend::builder().with_gc_interval(None).build();
-        let input = FixedWindowInput {
+        let input = SimpleInput {
             interval: MINUTE,
             max_requests: 1,
             key: "KEY1".to_string(),
@@ -189,7 +188,7 @@ mod tests {
             .with_gc_interval(Some(MINUTE))
             .build();
         backend
-            .request(FixedWindowInput {
+            .request(SimpleInput {
                 interval: MINUTE,
                 max_requests: 1,
                 key: "KEY1".to_string(),
@@ -197,7 +196,7 @@ mod tests {
             .await
             .unwrap();
         backend
-            .request(FixedWindowInput {
+            .request(SimpleInput {
                 interval: MINUTE * 2,
                 max_requests: 1,
                 key: "KEY2".to_string(),
@@ -217,7 +216,7 @@ mod tests {
     async fn test_output() {
         tokio::time::pause();
         let backend = InMemoryBackend::builder().build();
-        let input = FixedWindowInput {
+        let input = SimpleInput {
             interval: MINUTE,
             max_requests: 2,
             key: "KEY1".to_string(),
@@ -246,7 +245,7 @@ mod tests {
     async fn test_rollback() {
         tokio::time::pause();
         let backend = InMemoryBackend::builder().build();
-        let input = FixedWindowInput {
+        let input = SimpleInput {
             interval: MINUTE,
             max_requests: 5,
             key: "KEY1".to_string(),
@@ -263,7 +262,7 @@ mod tests {
     async fn test_remove_key() {
         tokio::time::pause();
         let backend = InMemoryBackend::builder().with_gc_interval(None).build();
-        let input = FixedWindowInput {
+        let input = SimpleInput {
             interval: MINUTE,
             max_requests: 1,
             key: "KEY1".to_string(),

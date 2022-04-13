@@ -16,6 +16,6 @@ Allows for:
 
 ## Provided Backends
 
-| Backend                       | Algorithm    | Store                                          |
-|-------------------------------|--------------|------------------------------------------------|
-| fixed_window::InMemoryBackend | Fixed Window | [Dashmap](https://github.com/xacrimon/dashmap) |
+| Backend         | Algorithm    | Store                                          |
+|-----------------|--------------|------------------------------------------------|
+| InMemoryBackend | Fixed Window | [Dashmap](https://github.com/xacrimon/dashmap) |
