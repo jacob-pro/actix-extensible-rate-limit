@@ -9,11 +9,24 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v2
 
       - name: Cargo Test
         run: cargo test --all-features --workspace -- --nocapture
+        env:
+          REDIS_HOST: redis
+          REDIS_PORT: 6379
 
       - name: Cargo Format Check
         run: cargo fmt -- --check

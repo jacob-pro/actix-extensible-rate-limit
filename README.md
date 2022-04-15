@@ -19,3 +19,4 @@ Allows for:
 | Backend         | Algorithm    | Store                                          |
 |-----------------|--------------|------------------------------------------------|
 | InMemoryBackend | Fixed Window | [Dashmap](https://github.com/xacrimon/dashmap) |
+| RedisBackend    | Fixed Window | [Redis](https://github.com/mitsuhiko/redis-rs) |
