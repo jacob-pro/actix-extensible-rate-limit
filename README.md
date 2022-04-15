@@ -1,7 +1,8 @@
 # Actix Extensible Rate Limit
 
 [![Build status](https://github.com/jacob-pro/actix-extensible-rate-limit/actions/workflows/rust.yml/badge.svg)](https://github.com/jacob-pro/actix-extensible-rate-limit/actions)
-![maintenance-status](https://img.shields.io/badge/maintenance-experimental-blue.svg)
+[![crates.io](https://img.shields.io/crates/v/actix-extensible-rate-limit.svg)](https://crates.io/crates/actix-extensible-rate-limit)
+[![docs.rs](https://docs.rs/actix-extensible-rate-limit/badge.svg)](https://docs.rs/actix-extensible-rate-limit/latest/actix-extensible-rate-limit/)
 
 An attempt at a more flexible rate limiting middleware for actix-web
 
