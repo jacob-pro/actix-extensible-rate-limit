@@ -1,16 +1,17 @@
 mod input_builder;
-#[cfg(feature = "dashmap")]
-mod memory;
-
-pub use input_builder::SimpleInputFunctionBuilder;
 
 #[cfg(feature = "dashmap")]
 #[cfg_attr(docsrs, doc(cfg(feature = "dashmap")))]
-pub use crate::backend::memory::{InMemoryBackend, InMemoryBackendBuilder};
+pub mod memory;
+
+#[cfg(feature = "redis")]
+#[cfg_attr(docsrs, doc(cfg(feature = "redis")))]
+pub mod redis;
+
+pub use input_builder::SimpleInputFunctionBuilder;
 
 use crate::HeaderCompatibleOutput;
 use actix_web::rt::time::Instant;
-use actix_web::Result;
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use std::time::Duration;
 pub trait Backend<I: 'static = SimpleInput>: Clone {
     type Output;
     type RollbackToken;
+    type Error;
 
     /// Process an incoming request.
     ///
@@ -36,7 +38,10 @@ pub trait Backend<I: 'static = SimpleInput>: Clone {
     /// Returns a boolean of whether to allow or deny the request, arbitrary output that can be used
     /// to transform the allowed and denied responses, and a token to allow the rate limit counter
     /// to be rolled back in certain conditions.
-    async fn request(&self, input: I) -> Result<(bool, Self::Output, Self::RollbackToken)>;
+    async fn request(
+        &self,
+        input: I,
+    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error>;
 
     /// Under certain conditions we may not want to rollback the request operation.
     ///
@@ -50,10 +55,10 @@ pub trait Backend<I: 'static = SimpleInput>: Clone {
     /// # Arguments
     ///
     /// * `token`: The token returned from the initial call to [Backend::request()].
-    async fn rollback(&self, token: Self::RollbackToken) -> Result<()>;
+    async fn rollback(&self, token: Self::RollbackToken) -> Result<(), Self::Error>;
 }
 
-/// A default [Backend] Input implementation.
+/// A default [Backend] Input structure.
 ///
 /// This may not be suitable for all use-cases.
 #[derive(Debug, Clone)]
@@ -66,7 +71,7 @@ pub struct SimpleInput {
     pub key: String,
 }
 
-/// A default [Backend::Output] implementation.
+/// A default [Backend::Output] structure.
 ///
 /// This may not be suitable for all use-cases.
 #[derive(Debug, Clone)]
@@ -85,7 +90,7 @@ pub trait SimpleBackend: Backend<SimpleInput, Output = SimpleOutput> {
     /// Removes the bucket for a given rate limit key.
     ///
     /// Intended to be used to reset a key before changing the interval.
-    async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>>;
+    async fn remove_key(&self, key: &str) -> Result<(), Self::Error>;
 }
 
 impl HeaderCompatibleOutput for SimpleOutput {

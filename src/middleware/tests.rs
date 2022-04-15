@@ -4,9 +4,9 @@ use actix_web::http::StatusCode;
 use actix_web::test::{read_body, TestRequest};
 use actix_web::{get, test, App, HttpResponse, Responder, ResponseError};
 use async_trait::async_trait;
-use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use thiserror::Error;
 
 #[get("/200")]
 async fn route_200() -> impl Responder {
@@ -29,18 +29,19 @@ struct MockBackendInner {
 struct MockBackendInput<T> {
     max: u64,
     output: T,
-    backend_error: Option<actix_web::Error>,
+    backend_error: Option<MockError>,
 }
 
 #[async_trait(?Send)]
 impl<T: 'static> Backend<MockBackendInput<T>> for MockBackend {
     type Output = T;
     type RollbackToken = ();
+    type Error = MockError;
 
     async fn request(
         &self,
         input: MockBackendInput<T>,
-    ) -> actix_web::Result<(bool, Self::Output, Self::RollbackToken)> {
+    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
         if let Some(e) = input.backend_error {
             return Err(e);
         }
@@ -48,13 +49,14 @@ impl<T: 'static> Backend<MockBackendInput<T>> for MockBackend {
         Ok((allow, input.output, ()))
     }
 
-    async fn rollback(&self, _: Self::RollbackToken) -> actix_web::Result<()> {
+    async fn rollback(&self, _: Self::RollbackToken) -> Result<(), Self::Error> {
         self.0.counter.fetch_sub(1, Ordering::Relaxed);
         Ok(())
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
+#[error("MockError: {message}")]
 struct MockError {
     code: StatusCode,
     message: String,
@@ -69,15 +71,9 @@ impl Default for MockError {
     }
 }
 
-impl Display for MockError {
-    fn fmt(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
-        unreachable!()
-    }
-}
-
 impl ResponseError for MockError {
-    fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.code).body(self.message.clone())
+    fn status_code(&self) -> StatusCode {
+        self.code
     }
 }
 
@@ -245,7 +241,7 @@ async fn test_rollback_and_transform_when_service_errors() {
     let backend = MockBackend::default();
 
     let broken = broken_middleware::Broken(MockError {
-        code: StatusCode::IM_A_TEAPOT,
+        code: StatusCode::INTERNAL_SERVER_ERROR,
         message: "Teapot".to_string(),
     });
 
@@ -284,7 +280,7 @@ async fn test_rollback_and_transform_when_service_errors() {
         .as_response_error()
         .error_response();
     assert!(failure.headers().contains_key("here"));
-    assert_eq!(failure.status(), StatusCode::IM_A_TEAPOT);
+    assert_eq!(failure.status(), StatusCode::INTERNAL_SERVER_ERROR);
     // But the count should not have increased because of rollback
     assert_eq!(backend.0.counter.load(Ordering::Relaxed), 0);
 }

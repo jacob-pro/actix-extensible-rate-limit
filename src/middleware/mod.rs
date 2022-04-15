@@ -19,8 +19,8 @@ type DeniedResponse<BO> = dyn Fn(&BO) -> HttpResponse;
 type RollbackCondition = dyn Fn(Result<StatusCode, &actix_web::Error>) -> bool;
 
 /// Rate limit middleware.
-pub struct RateLimiter<BE, BO, F> {
-    backend: BE,
+pub struct RateLimiter<BA, BO, F> {
+    backend: BA,
     input_fn: Rc<F>,
     fail_open: bool,
     allowed_mutation: Option<Rc<AllowedTransformation<BO>>>,
@@ -28,9 +28,9 @@ pub struct RateLimiter<BE, BO, F> {
     rollback_condition: Option<Rc<RollbackCondition>>,
 }
 
-impl<BE, BI, BO, F, O> Clone for RateLimiter<BE, BO, F>
+impl<BA, BI, BO, F, O> Clone for RateLimiter<BA, BO, F>
 where
-    BE: Backend<BI> + 'static,
+    BA: Backend<BI> + 'static,
     BI: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
     O: Future<Output = Result<BI, actix_web::Error>>,
@@ -47,9 +47,9 @@ where
     }
 }
 
-impl<BE, BI, BO, F, O> RateLimiter<BE, BO, F>
+impl<BA, BI, BO, F, O> RateLimiter<BA, BO, F>
 where
-    BE: Backend<BI, Output = BO> + 'static,
+    BA: Backend<BI, Output = BO> + 'static,
     BI: 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
     O: Future<Output = Result<BI, actix_web::Error>>,
@@ -58,25 +58,26 @@ where
     ///
     /// * `backend`: A rate limiting algorithm and store implementation.
     /// * `input_fn`: A future that produces input to the backend based on the incoming request.
-    pub fn builder(backend: BE, input_fn: F) -> RateLimiterBuilder<BE, BO, F> {
+    pub fn builder(backend: BA, input_fn: F) -> RateLimiterBuilder<BA, BO, F> {
         RateLimiterBuilder::new(backend, input_fn)
     }
 }
 
-impl<S, B, BE, BI, BO, F, O> Transform<S, ServiceRequest> for RateLimiter<BE, BO, F>
+impl<S, B, BA, BI, BO, BE, F, O> Transform<S, ServiceRequest> for RateLimiter<BA, BO, F>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
-    BE: Backend<BI, Output = BO> + 'static,
+    BA: Backend<BI, Output = BO, Error = BE> + 'static,
     BI: 'static,
     BO: 'static,
+    BE: Into<actix_web::Error> + std::fmt::Display + 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
     O: Future<Output = Result<BI, actix_web::Error>>,
 {
     type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
-    type Transform = RateLimiterMiddleware<S, BE, BO, F>;
+    type Transform = RateLimiterMiddleware<S, BA, BO, F>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
@@ -103,14 +104,15 @@ pub struct RateLimiterMiddleware<S, BE, BO, F> {
     rollback_condition: Option<Rc<RollbackCondition>>,
 }
 
-impl<S, B, BE, BI, BO, F, O> Service<ServiceRequest> for RateLimiterMiddleware<S, BE, BO, F>
+impl<S, B, BA, BI, BO, BE, F, O> Service<ServiceRequest> for RateLimiterMiddleware<S, BA, BO, F>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
-    BE: Backend<BI, Output = BO> + 'static,
+    BA: Backend<BI, Output = BO, Error = BE> + 'static,
     BI: 'static,
     BO: 'static,
+    BE: Into<actix_web::Error> + std::fmt::Display + 'static,
     F: Fn(&ServiceRequest) -> O + 'static,
     O: Future<Output = Result<BI, actix_web::Error>>,
 {
@@ -148,7 +150,7 @@ where
                         (None, None)
                     } else {
                         log::error!("Rate limiter failed: {}", e);
-                        return Err(e);
+                        return Err(e.into());
                     }
                 }
             };

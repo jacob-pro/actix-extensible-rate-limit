@@ -6,7 +6,7 @@ use std::time::Duration;
 
 pub type CustomFn = Box<dyn Fn(&ServiceRequest) -> Result<String, actix_web::Error>>;
 
-/// Utility to create a input function that produces a [SimpleInput]
+/// Utility to create a input function that produces a [SimpleInput].
 ///
 /// You should take care to ensure that you are producing unique keys per backend.
 ///
@@ -144,7 +144,7 @@ fn ip_key(ip_str: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::InMemoryBackend;
+    use crate::backend::memory::InMemoryBackend;
     use crate::RateLimiter;
     use actix_web::App;
     use std::time::Duration;

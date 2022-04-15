@@ -3,6 +3,7 @@ use actix_web::rt::task::JoinHandle;
 use actix_web::rt::time::Instant;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,8 +23,8 @@ struct Value {
 }
 
 impl InMemoryBackend {
-    pub fn builder() -> InMemoryBackendBuilder {
-        InMemoryBackendBuilder {
+    pub fn builder() -> Builder {
+        Builder {
             gc_interval: Some(Duration::from_secs(DEFAULT_GC_INTERVAL_SECONDS)),
         }
     }
@@ -43,15 +44,40 @@ impl InMemoryBackend {
     }
 }
 
+pub struct Builder {
+    gc_interval: Option<Duration>,
+}
+
+impl Builder {
+    /// Override the default garbage collector interval.
+    ///
+    /// Set to None to disable garbage collection.
+    ///
+    /// The garbage collector periodically scans the internal map, removing expired buckets.
+    pub fn with_gc_interval(mut self, interval: Option<Duration>) -> Self {
+        self.gc_interval = interval;
+        self
+    }
+
+    pub fn build(self) -> InMemoryBackend {
+        let map = Arc::new(DashMap::<String, Value>::new());
+        let gc_handle = self.gc_interval.map(|gc_interval| {
+            Arc::new(InMemoryBackend::garbage_collector(map.clone(), gc_interval))
+        });
+        InMemoryBackend { map, gc_handle }
+    }
+}
+
 #[async_trait(?Send)]
 impl Backend<SimpleInput> for InMemoryBackend {
     type Output = SimpleOutput;
     type RollbackToken = String;
+    type Error = Infallible;
 
     async fn request(
         &self,
         input: SimpleInput,
-    ) -> actix_web::Result<(bool, Self::Output, Self::RollbackToken)> {
+    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
         let now = Instant::now();
         let mut count = 1;
         let mut expiry = now
@@ -85,7 +111,7 @@ impl Backend<SimpleInput> for InMemoryBackend {
         Ok((allow, output, input.key))
     }
 
-    async fn rollback(&self, token: Self::RollbackToken) -> actix_web::Result<()> {
+    async fn rollback(&self, token: Self::RollbackToken) -> Result<(), Self::Error> {
         self.map.entry(token).and_modify(|v| {
             v.count = v.count.saturating_sub(1);
         });
@@ -95,7 +121,7 @@ impl Backend<SimpleInput> for InMemoryBackend {
 
 #[async_trait(?Send)]
 impl SimpleBackend for InMemoryBackend {
-    async fn remove_key(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn remove_key(&self, key: &str) -> Result<(), Self::Error> {
         self.map.remove(key);
         Ok(())
     }
@@ -106,30 +132,6 @@ impl Drop for InMemoryBackend {
         if let Some(handle) = &self.gc_handle {
             handle.abort();
         }
-    }
-}
-
-pub struct InMemoryBackendBuilder {
-    gc_interval: Option<Duration>,
-}
-
-impl InMemoryBackendBuilder {
-    /// Override the default garbage collector interval.
-    ///
-    /// Set to None to disable garbage collection.
-    ///
-    /// The garbage collector periodically scans the internal map, removing expired buckets.
-    pub fn with_gc_interval(mut self, interval: Option<Duration>) -> Self {
-        self.gc_interval = interval;
-        self
-    }
-
-    pub fn build(self) -> InMemoryBackend {
-        let map = Arc::new(DashMap::<String, Value>::new());
-        let gc_handle = self.gc_interval.map(|gc_interval| {
-            Arc::new(InMemoryBackend::garbage_collector(map.clone(), gc_interval))
-        });
-        InMemoryBackend { map, gc_handle }
     }
 }
 
