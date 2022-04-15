@@ -114,6 +114,7 @@ impl Backend<SimpleInput> for RedisBackend {
         input: SimpleInput,
     ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
         let key = self.make_key(&input.key);
+        // https://github.com/actix/actix-extras/blob/master/actix-limitation/src/lib.rs#L123
         let mut pipe = redis::pipe();
         pipe.atomic()
             .cmd("SET") // Set key and value
