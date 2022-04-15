@@ -132,7 +132,13 @@ where
         let rollback_condition = self.rollback_condition.clone();
 
         Box::pin(async move {
-            let input = (input_fn)(&req).await?;
+            let input = match (input_fn)(&req).await {
+                Ok(input) => input,
+                Err(e) => {
+                    log::error!("Rate limiter input function failed: {e}");
+                    return Err(e);
+                }
+            };
 
             let (output, rollback) = match backend.request(input).await {
                 // Able to successfully query rate limiter backend

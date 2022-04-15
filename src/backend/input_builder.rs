@@ -1,8 +1,10 @@
 use crate::backend::SimpleInput;
 use actix_web::dev::ServiceRequest;
+use actix_web::ResponseError;
 use std::future::{ready, Ready};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{AddrParseError, IpAddr, Ipv6Addr};
 use std::time::Duration;
+use thiserror::Error;
 
 pub type CustomFn = Box<dyn Fn(&ServiceRequest) -> Result<String, actix_web::Error>>;
 
@@ -96,10 +98,10 @@ impl SimpleInputFunctionBuilder {
                     components.push(custom.clone());
                 }
                 if self.real_ip_key {
-                    components.push(ip_key(info.realip_remote_addr().unwrap()))
+                    components.push(ip_key(info.realip_remote_addr().unwrap())?)
                 }
                 if self.peer_ip_key {
-                    components.push(ip_key(info.peer_addr().unwrap()))
+                    components.push(ip_key(info.peer_addr().unwrap())?)
                 }
                 if self.path_key {
                     components.push(req.path().to_owned());
@@ -119,18 +121,28 @@ impl SimpleInputFunctionBuilder {
     }
 }
 
+#[derive(Debug, Error)]
+enum Error {
+    #[error("Unable to parse remote IP address: {0}")]
+    InvalidIpError(
+        #[source]
+        #[from]
+        AddrParseError,
+    ),
+}
+
+impl ResponseError for Error {}
+
 // Groups IPv6 addresses together, see:
 // https://adam-p.ca/blog/2022/02/ipv6-rate-limiting/
 // https://support.cloudflare.com/hc/en-us/articles/115001635128-Configuring-Cloudflare-Rate-Limiting
-fn ip_key(ip_str: &str) -> String {
-    let ip = ip_str
-        .parse::<IpAddr>()
-        .expect("Unable to parse remote IP address - proxy misconfiguration?");
-    match ip {
+fn ip_key(ip_str: &str) -> Result<String, Error> {
+    let ip = ip_str.parse::<IpAddr>()?;
+    Ok(match ip {
         IpAddr::V4(v4) => v4.to_string(),
         IpAddr::V6(v6) => {
             if let Some(v4) = v6.to_ipv4() {
-                return v4.to_string();
+                return Ok(v4.to_string());
             }
             let zeroes = [0u16; 4];
             let concat = [&v6.segments()[0..4], &zeroes].concat();
@@ -138,7 +150,7 @@ fn ip_key(ip_str: &str) -> String {
             let subnet = Ipv6Addr::from(concat);
             format!("{}/64", subnet)
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -161,12 +173,12 @@ mod tests {
     #[test]
     fn test_ip_key() {
         // Check that IPv4 addresses are preserved
-        assert_eq!(ip_key("142.250.187.206"), "142.250.187.206");
+        assert_eq!(ip_key("142.250.187.206").unwrap(), "142.250.187.206");
         // Check that IPv4 mapped addresses are preserved
-        assert_eq!(ip_key("::FFFF:142.250.187.206"), "142.250.187.206");
+        assert_eq!(ip_key("::FFFF:142.250.187.206").unwrap(), "142.250.187.206");
         // Check that IPv6 addresses are grouped into /64 subnets
         assert_eq!(
-            ip_key("2a00:1450:4009:81f::200e"),
+            ip_key("2a00:1450:4009:81f::200e").unwrap(),
             "2a00:1450:4009:81f::/64"
         );
     }
