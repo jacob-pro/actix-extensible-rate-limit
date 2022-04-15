@@ -20,3 +20,20 @@ Allows for:
 |-----------------|--------------|------------------------------------------------|
 | InMemoryBackend | Fixed Window | [Dashmap](https://github.com/xacrimon/dashmap) |
 | RedisBackend    | Fixed Window | [Redis](https://github.com/mitsuhiko/redis-rs) |
+
+## Getting Started
+
+```rust
+// A backend is responsible for storing rate limit data, and choosing whether to allow/deny requests
+let backend = InMemoryBackend::builder().build();
+
+// Assign a limit of 5 requests per minute per client ip address
+let input = SimpleInputFunctionBuilder::new(Duration::from_secs(60), 5)
+    .real_ip_key()
+    .build();
+    
+let middleware = RateLimiter::builder(backend, input).add_headers().build();
+
+// Apply the middleware to your actix app/routes
+App::new().wrap(middleware)
+```
