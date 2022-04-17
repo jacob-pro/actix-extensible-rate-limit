@@ -130,13 +130,10 @@ where
     /// After processing a request, attempt to rollback the request count based on the status
     /// of the service response.
     ///
-    /// The status is a result, because if a middleware further down the chain failed then
-    /// the service call returns an error.
-    ///
     /// By default the rate limit is never rolled back.
     pub fn rollback_condition<C>(mut self, condition: Option<C>) -> Self
     where
-        C: Fn(Result<StatusCode, &actix_web::Error>) -> bool + 'static,
+        C: Fn(StatusCode) -> bool + 'static,
     {
         self.rollback_condition = condition.map(|m| Rc::new(m) as Rc<RollbackCondition>);
         self
@@ -144,18 +141,8 @@ where
 
     /// Configures the [RateLimiterBuilder::rollback_condition] to rollback if the status code
     /// is a server error (5xx).
-    ///
-    /// # Warning
-    ///
-    /// This assumes that all your middleware errors correctly implement
-    /// [ResponseError::status_code()](actix_web::ResponseError::status_code).
     pub fn rollback_server_errors(self) -> Self {
-        self.rollback_condition(Some(
-            |status: Result<StatusCode, &actix_web::Error>| match status {
-                Ok(s) => s.is_server_error(),
-                Err(e) => e.as_response_error().status_code().is_server_error(),
-            },
-        ))
+        self.rollback_condition(Some(|status: StatusCode| status.is_server_error()))
     }
 
     pub fn build(self) -> RateLimiter<BE, BO, F> {

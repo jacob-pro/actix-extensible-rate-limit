@@ -7,16 +7,15 @@ use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::header::HeaderMap;
 use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, ResponseError};
+use actix_web::HttpResponse;
 use builder::RateLimiterBuilder;
 use futures::future::{ok, LocalBoxFuture, Ready};
 use std::cell::RefCell;
-use std::fmt::{Debug, Display, Formatter};
 use std::{future::Future, rc::Rc};
 
 type AllowedTransformation<BO> = dyn Fn(&mut HeaderMap, Option<&BO>, bool);
 type DeniedResponse<BO> = dyn Fn(&BO) -> HttpResponse;
-type RollbackCondition = dyn Fn(Result<StatusCode, &actix_web::Error>) -> bool;
+type RollbackCondition = dyn Fn(StatusCode) -> bool;
 
 /// Rate limit middleware.
 pub struct RateLimiter<BA, BO, F> {
@@ -136,7 +135,7 @@ where
                 Ok(input) => input,
                 Err(e) => {
                     log::error!("Rate limiter input function failed: {e}");
-                    return Err(e);
+                    return Ok(req.into_response(e.error_response()).map_into_right_body());
                 }
             };
 
@@ -156,18 +155,19 @@ where
                         (None, None)
                     } else {
                         log::error!("Rate limiter failed: {}", e);
-                        return Err(e.into());
+                        return Ok(req
+                            .into_response(e.into().error_response())
+                            .map_into_right_body());
                     }
                 }
             };
 
-            // Here we allow the request through to the service
-            let service_response = service.call(req).await;
+            let mut service_response = service.call(req).await?;
 
             let mut rolled_back = false;
             if let Some(token) = rollback {
                 if let Some(rollback_condition) = rollback_condition {
-                    let status = service_response.as_ref().map(|s| s.status());
+                    let status = service_response.status();
                     if rollback_condition(status) {
                         if let Err(e) = backend.rollback(token).await {
                             log::error!("Unable to rollback rate-limit count for response: {:?}, error: {e}", status);
@@ -178,68 +178,11 @@ where
                 }
             }
 
-            // We will allow transforming the HttpResponse headers regardless of whether the
-            // service call succeeded
-            let service_response = match service_response {
-                Ok(mut service_response) => {
-                    if let Some(transformation) = allowed_transformation {
-                        (transformation)(
-                            service_response.headers_mut(),
-                            output.as_ref(),
-                            rolled_back,
-                        );
-                    }
-                    Ok(service_response)
-                }
-                Err(e) => {
-                    if let Some(transformation) = allowed_transformation {
-                        Err(TransformedError {
-                            output,
-                            transformation,
-                            inner: e,
-                            rolled_back,
-                        }
-                        .into())
-                    } else {
-                        Err(e)
-                    }
-                }
-            };
+            if let Some(transformation) = allowed_transformation {
+                (transformation)(service_response.headers_mut(), output.as_ref(), rolled_back);
+            }
 
-            Ok(ServiceResponse::map_into_left_body(service_response?))
+            Ok(service_response.map_into_left_body())
         })
-    }
-}
-
-// Intended to transparently wrap an actix_web error, applying the header transformation
-// when the error_response is called.
-struct TransformedError<BO> {
-    output: Option<BO>,
-    transformation: Rc<AllowedTransformation<BO>>,
-    inner: actix_web::Error,
-    rolled_back: bool,
-}
-
-impl<BO> Display for TransformedError<BO> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.inner, f)
-    }
-}
-
-impl<BO> Debug for TransformedError<BO> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.inner, f)
-    }
-}
-
-impl<BO> ResponseError for TransformedError<BO> {
-    fn status_code(&self) -> StatusCode {
-        self.inner.as_response_error().status_code()
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        let mut inner: HttpResponse = self.inner.error_response();
-        (self.transformation)(inner.headers_mut(), self.output.as_ref(), self.rolled_back);
-        inner
     }
 }

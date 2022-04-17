@@ -174,10 +174,8 @@ async fn test_fail_open() {
     })
     .build();
     let app = test::init_service(App::new().service(route_200).wrap(limiter)).await;
-    assert!(app
-        .call(TestRequest::get().uri("/200").to_request())
-        .await
-        .is_err());
+    let response = test::call_service(&app, TestRequest::get().uri("/200").to_request()).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // Test again with fail open enabled
     let limiter = RateLimiter::builder(backend, |_req| async {
@@ -234,109 +232,4 @@ async fn test_rollback() {
     let response = test::call_service(&app, TestRequest::get().uri("/500").to_request()).await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(backend.0.counter.load(Ordering::Relaxed), 1);
-}
-
-#[actix_web::test]
-async fn test_rollback_and_transform_when_service_errors() {
-    let backend = MockBackend::default();
-
-    let broken = broken_middleware::Broken(MockError {
-        code: StatusCode::INTERNAL_SERVER_ERROR,
-        message: "Teapot".to_string(),
-    });
-
-    let limiter = RateLimiter::builder(backend.clone(), |_req| async {
-        Ok(MockBackendInput {
-            max: u64::MAX,
-            output: (),
-            backend_error: None,
-        })
-    })
-    .request_allowed_transformation(Some(
-        |headers: &mut HeaderMap, _: Option<&()>, rolled_back: bool| {
-            assert!(rolled_back);
-            headers.append(
-                HeaderName::from_static("here"),
-                HeaderValue::from_static("abc"),
-            )
-        },
-    ))
-    .rollback_server_errors()
-    .build();
-
-    let app = test::init_service(
-        App::new()
-            .service(actix_web::web::scope("").service(route_200).wrap(broken))
-            .wrap(limiter),
-    )
-    .await;
-
-    // The request should fail because the inner middleware failed.
-    // But header should still be present indicating the outer rate limiter was working.
-    let failure: HttpResponse = app
-        .call(TestRequest::get().uri("/200").to_request())
-        .await
-        .unwrap_err()
-        .as_response_error()
-        .error_response();
-    assert!(failure.headers().contains_key("here"));
-    assert_eq!(failure.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    // But the count should not have increased because of rollback
-    assert_eq!(backend.0.counter.load(Ordering::Relaxed), 0);
-}
-
-mod broken_middleware {
-    use super::MockError;
-    use actix_web::{
-        dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-        Error,
-    };
-    use futures::future::LocalBoxFuture;
-    use std::future::{ready, Ready};
-
-    // A Middleware that allows us to test what happens when the service.call returns an error
-    pub struct Broken(pub(super) MockError);
-
-    impl<S, B> Transform<S, ServiceRequest> for Broken
-    where
-        S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-        S::Future: 'static,
-        B: 'static,
-    {
-        type Response = ServiceResponse<B>;
-        type Error = Error;
-        type Transform = BrokenMiddleware<S>;
-        type InitError = ();
-        type Future = Ready<Result<Self::Transform, Self::InitError>>;
-
-        fn new_transform(&self, service: S) -> Self::Future {
-            ready(Ok(BrokenMiddleware {
-                service,
-                error: self.0.clone(),
-            }))
-        }
-    }
-
-    pub struct BrokenMiddleware<S> {
-        service: S,
-        error: MockError,
-    }
-
-    impl<S, B> Service<ServiceRequest> for BrokenMiddleware<S>
-    where
-        S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-        S::Future: 'static,
-        B: 'static,
-    {
-        type Response = ServiceResponse<B>;
-        type Error = Error;
-        type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-        forward_ready!(service);
-
-        fn call(&self, _: ServiceRequest) -> Self::Future {
-            let err = self.error.clone();
-            Box::pin(async move { Err(err.into()) })
-        }
-    }
 }
