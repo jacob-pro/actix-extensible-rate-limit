@@ -8,7 +8,7 @@ pub mod memory;
 #[cfg_attr(docsrs, doc(cfg(feature = "redis")))]
 pub mod redis;
 
-pub use input_builder::SimpleInputFunctionBuilder;
+pub use input_builder::{SimpleInputFunctionBuilder, SimpleInputFuture};
 
 use crate::HeaderCompatibleOutput;
 use actix_web::rt::time::Instant;

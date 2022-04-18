@@ -6,7 +6,9 @@ use std::net::{AddrParseError, IpAddr, Ipv6Addr};
 use std::time::Duration;
 use thiserror::Error;
 
-pub type CustomFn = Box<dyn Fn(&ServiceRequest) -> Result<String, actix_web::Error>>;
+type CustomFn = Box<dyn Fn(&ServiceRequest) -> Result<String, actix_web::Error>>;
+
+pub type SimpleInputFuture = Ready<Result<SimpleInput, actix_web::Error>>;
 
 /// Utility to create a input function that produces a [SimpleInput].
 ///
@@ -87,9 +89,7 @@ impl SimpleInputFunctionBuilder {
         self
     }
 
-    pub fn build(
-        self,
-    ) -> impl Fn(&ServiceRequest) -> Ready<Result<SimpleInput, actix_web::Error>> + 'static {
+    pub fn build(self) -> impl Fn(&ServiceRequest) -> SimpleInputFuture + 'static {
         move |req| {
             ready((|| {
                 let mut components = Vec::new();
