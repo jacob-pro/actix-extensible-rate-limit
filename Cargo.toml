@@ -1,13 +1,11 @@
 [package]
 name = "actix-extensible-rate-limit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Rate limiting middleware for actix-web"
 repository = "https://github.com/jacob-pro/actix-extensible-rate-limit"
 homepage = "https://github.com/jacob-pro/actix-extensible-rate-limit"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 actix-web = { version = "4", default-features = false, features = ["macros"] }

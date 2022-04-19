@@ -156,19 +156,6 @@ fn ip_key(ip_str: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::memory::InMemoryBackend;
-    use crate::RateLimiter;
-    use actix_web::App;
-    use std::time::Duration;
-
-    #[actix_web::test]
-    async fn test_use_with_middleware() {
-        // Check that all the type signatures work together
-        let backend = InMemoryBackend::builder().build();
-        let input_fn = SimpleInputFunctionBuilder::new(Duration::from_secs(60), 60).build();
-        let limiter = RateLimiter::builder(backend, input_fn).build();
-        actix_web::test::init_service(App::new().wrap(limiter)).await;
-    }
 
     #[test]
     fn test_ip_key() {
