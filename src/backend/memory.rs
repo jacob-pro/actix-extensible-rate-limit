@@ -1,7 +1,6 @@
-use crate::backend::{Backend, SimpleBackend, SimpleInput, SimpleOutput};
+use crate::backend::{Backend, Decision, SimpleBackend, SimpleInput, SimpleOutput};
 use actix_web::rt::task::JoinHandle;
 use actix_web::rt::time::Instant;
-use async_trait::async_trait;
 use dashmap::DashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -68,7 +67,6 @@ impl Builder {
     }
 }
 
-#[async_trait(?Send)]
 impl Backend<SimpleInput> for InMemoryBackend {
     type Output = SimpleOutput;
     type RollbackToken = String;
@@ -77,7 +75,7 @@ impl Backend<SimpleInput> for InMemoryBackend {
     async fn request(
         &self,
         input: SimpleInput,
-    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
+    ) -> Result<(Decision, Self::Output, Self::RollbackToken), Self::Error> {
         let now = Instant::now();
         let mut count = 1;
         let mut expiry = now
@@ -108,7 +106,7 @@ impl Backend<SimpleInput> for InMemoryBackend {
             remaining: input.max_requests.saturating_sub(count),
             reset: expiry,
         };
-        Ok((allow, output, input.key))
+        Ok((Decision::from_allowed(allow), output, input.key))
     }
 
     async fn rollback(&self, token: Self::RollbackToken) -> Result<(), Self::Error> {
@@ -119,7 +117,6 @@ impl Backend<SimpleInput> for InMemoryBackend {
     }
 }
 
-#[async_trait(?Send)]
 impl SimpleBackend for InMemoryBackend {
     async fn remove_key(&self, key: &str) -> Result<(), Self::Error> {
         self.map.remove(key);
@@ -153,11 +150,11 @@ mod tests {
         for _ in 0..5 {
             // First 5 should be allowed
             let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-            assert!(allow);
+            assert!(allow.is_allowed());
         }
         // Sixth should be denied
         let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        assert!(!allow.is_allowed());
     }
 
     #[actix_web::test]
@@ -170,17 +167,17 @@ mod tests {
             key: "KEY1".to_string(),
         };
         // Make first request, should be allowed
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         // Request again, should be denied
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_denied());
         // Advance time and try again, should now be allowed
         tokio::time::advance(MINUTE).await;
         // We want to be sure the key hasn't been garbage collected, and we are testing the expiry logic
         assert!(backend.map.contains_key("KEY1"));
-        let (allow, _, _) = backend.request(input).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_allowed());
     }
 
     #[actix_web::test]
@@ -224,20 +221,20 @@ mod tests {
             key: "KEY1".to_string(),
         };
         // First of 2 should be allowed.
-        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         assert_eq!(output.remaining, 1);
         assert_eq!(output.limit, 2);
         assert_eq!(output.reset, Instant::now() + MINUTE);
         // Second of 2 should be allowed.
-        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         assert_eq!(output.remaining, 0);
         assert_eq!(output.limit, 2);
         assert_eq!(output.reset, Instant::now() + MINUTE);
         // Should be denied
-        let (allow, output, _) = backend.request(input).await.unwrap();
-        assert!(!allow);
+        let (decision, output, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_denied());
         assert_eq!(output.remaining, 0);
         assert_eq!(output.limit, 2);
         assert_eq!(output.reset, Instant::now() + MINUTE);
@@ -269,13 +266,13 @@ mod tests {
             max_requests: 1,
             key: "KEY1".to_string(),
         };
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_denied());
         backend.remove_key("KEY1").await.unwrap();
         // Counter should have been reset
-        let (allow, _, _) = backend.request(input).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_allowed());
     }
 }

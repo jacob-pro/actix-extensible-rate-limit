@@ -4,18 +4,15 @@ use actix_web::dev::ServiceRequest;
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
-use once_cell::sync::Lazy;
 use std::future::Future;
 use std::rc::Rc;
 
-pub static X_RATELIMIT_LIMIT: Lazy<HeaderName> =
-    Lazy::new(|| HeaderName::from_static("x-ratelimit-limit"));
-
-pub static X_RATELIMIT_REMAINING: Lazy<HeaderName> =
-    Lazy::new(|| HeaderName::from_static("x-ratelimit-remaining"));
-
-pub static X_RATELIMIT_RESET: Lazy<HeaderName> =
-    Lazy::new(|| HeaderName::from_static("x-ratelimit-reset"));
+#[allow(clippy::declare_interior_mutable_const)]
+pub const X_RATELIMIT_LIMIT: HeaderName = HeaderName::from_static("x-ratelimit-limit");
+#[allow(clippy::declare_interior_mutable_const)]
+pub const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
+#[allow(clippy::declare_interior_mutable_const)]
+pub const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 
 pub struct RateLimiterBuilder<BE, BO, F> {
     backend: BE,
@@ -68,15 +65,15 @@ where
     {
         self.allowed_transformation = Some(Rc::new(|map, output, rolled_back| {
             if let Some(status) = output {
-                map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit()));
+                map.insert(X_RATELIMIT_LIMIT, HeaderValue::from(status.limit()));
                 let remaining = if rolled_back {
                     status.remaining() + 1
                 } else {
                     status.remaining()
                 };
-                map.insert(X_RATELIMIT_REMAINING.clone(), HeaderValue::from(remaining));
+                map.insert(X_RATELIMIT_REMAINING, HeaderValue::from(remaining));
                 map.insert(
-                    X_RATELIMIT_RESET.clone(),
+                    X_RATELIMIT_RESET,
                     HeaderValue::from(status.seconds_until_reset()),
                 );
             }
@@ -84,13 +81,10 @@ where
         self.denied_response = Rc::new(|status| {
             let mut response = HttpResponse::TooManyRequests().finish();
             let map = response.headers_mut();
-            map.insert(X_RATELIMIT_LIMIT.clone(), HeaderValue::from(status.limit()));
-            map.insert(
-                X_RATELIMIT_REMAINING.clone(),
-                HeaderValue::from(status.remaining()),
-            );
+            map.insert(X_RATELIMIT_LIMIT, HeaderValue::from(status.limit()));
+            map.insert(X_RATELIMIT_REMAINING, HeaderValue::from(status.remaining()));
             let seconds = status.seconds_until_reset();
-            map.insert(X_RATELIMIT_RESET.clone(), HeaderValue::from(seconds));
+            map.insert(X_RATELIMIT_RESET, HeaderValue::from(seconds));
             map.insert(RETRY_AFTER, HeaderValue::from(seconds));
             response
         });

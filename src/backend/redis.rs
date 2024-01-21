@@ -1,7 +1,6 @@
-use crate::backend::{Backend, SimpleBackend, SimpleInput, SimpleOutput};
+use crate::backend::{Backend, Decision, SimpleBackend, SimpleInput, SimpleOutput};
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, ResponseError};
-use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::borrow::Cow;
@@ -103,7 +102,6 @@ impl Builder {
     }
 }
 
-#[async_trait(?Send)]
 impl Backend<SimpleInput> for RedisBackend {
     type Output = SimpleOutput;
     type RollbackToken = String;
@@ -112,7 +110,7 @@ impl Backend<SimpleInput> for RedisBackend {
     async fn request(
         &self,
         input: SimpleInput,
-    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
+    ) -> Result<(Decision, Self::Output, Self::RollbackToken), Self::Error> {
         let key = self.make_key(&input.key);
         // https://github.com/actix/actix-extras/blob/master/actix-limitation/src/lib.rs#L123
         let mut pipe = redis::pipe();
@@ -141,7 +139,7 @@ impl Backend<SimpleInput> for RedisBackend {
             remaining: input.max_requests.saturating_sub(count),
             reset: Instant::now() + Duration::from_secs(ttl as u64),
         };
-        Ok((allow, output, input.key))
+        Ok((Decision::from_allowed(allow), output, input.key))
     }
 
     async fn rollback(&self, token: Self::RollbackToken) -> Result<(), Self::Error> {
@@ -168,7 +166,6 @@ impl Backend<SimpleInput> for RedisBackend {
     }
 }
 
-#[async_trait(?Send)]
 impl SimpleBackend for RedisBackend {
     /// Note that the key prefix (if set) is automatically included, you do not need to prepend
     /// it yourself.
@@ -208,12 +205,12 @@ mod tests {
         };
         for _ in 0..5 {
             // First 5 should be allowed
-            let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-            assert!(allow);
+            let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+            assert!(decision.is_allowed());
         }
         // Sixth should be denied
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_denied());
     }
 
     #[actix_web::test]
@@ -225,15 +222,15 @@ mod tests {
             key: "test_reset".to_string(),
         };
         // Make first request, should be allowed
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         // Request again, should be denied
-        let (allow, out, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        let (decision, out, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_denied());
         // Sleep until reset, should now be allowed
         tokio::time::sleep(Duration::from_secs(out.seconds_until_reset())).await;
-        let (allow, _, _) = backend.request(input).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_allowed());
     }
 
     #[actix_web::test]
@@ -245,20 +242,20 @@ mod tests {
             key: "test_output".to_string(),
         };
         // First of 2 should be allowed.
-        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         assert_eq!(output.remaining, 1);
         assert_eq!(output.limit, 2);
         assert!(output.seconds_until_reset() > 0 && output.seconds_until_reset() <= 60);
         // Second of 2 should be allowed.
-        let (allow, output, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
+        let (decision, output, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
         assert_eq!(output.remaining, 0);
         assert_eq!(output.limit, 2);
         assert!(output.seconds_until_reset() > 0 && output.seconds_until_reset() <= 60);
         // Should be denied
-        let (allow, output, _) = backend.request(input).await.unwrap();
-        assert!(!allow);
+        let (decision, output, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_denied());
         assert_eq!(output.remaining, 0);
         assert_eq!(output.limit, 2);
         assert!(output.seconds_until_reset() > 0 && output.seconds_until_reset() <= 60);
@@ -306,14 +303,14 @@ mod tests {
             max_requests: 1,
             key: "test_remove_key".to_string(),
         };
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(allow);
-        let (allow, _, _) = backend.request(input.clone()).await.unwrap();
-        assert!(!allow);
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_allowed());
+        let (decision, _, _) = backend.request(input.clone()).await.unwrap();
+        assert!(decision.is_denied());
         backend.remove_key("test_remove_key").await.unwrap();
         // Counter should have been reset
-        let (allow, _, _) = backend.request(input).await.unwrap();
-        assert!(allow);
+        let (decision, _, _) = backend.request(input).await.unwrap();
+        assert!(decision.is_allowed());
     }
 
     #[actix_web::test]
