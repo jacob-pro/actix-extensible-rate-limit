@@ -52,3 +52,25 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 ```
+
+Try it out:
+
+```
+$ curl -v http://127.0.0.1:8080
+*   Trying 127.0.0.1:8080...
+* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+> GET / HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/7.83.1
+> Accept: */*
+>
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 404 Not Found
+< content-length: 0
+< x-ratelimit-limit: 5
+< x-ratelimit-reset: 60
+< x-ratelimit-remaining: 4
+< date: Sun, 21 Jan 2024 16:52:27 GMT
+<
+* Connection #0 to host 127.0.0.1 left intact
+```

@@ -9,22 +9,41 @@ pub mod memory;
 pub mod redis;
 
 pub use input_builder::{SimpleInputFunctionBuilder, SimpleInputFuture};
+use std::future::Future;
 
 use crate::HeaderCompatibleOutput;
 use actix_web::rt::time::Instant;
-use async_trait::async_trait;
 use std::time::Duration;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Decision {
+    Allowed,
+    Denied,
+}
+
+impl Decision {
+    pub fn from_allowed(allowed: bool) -> Self {
+        if allowed {
+            Self::Allowed
+        } else {
+            Self::Denied
+        }
+    }
+
+    pub fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+
+    pub fn is_denied(self) -> bool {
+        matches!(self, Self::Denied)
+    }
+}
+
 /// Describes an implementation of a rate limiting store and algorithm.
-///
-/// To implement your own rate limiting backend it is recommended to use
-/// [async_trait](https://github.com/dtolnay/async-trait), and add the `#[async_trait(?Send)]`
-/// attribute onto your trait implementation.
 ///
 /// A Backend is required to implement [Clone], usually this means wrapping your data store within
 /// an [Arc](std::sync::Arc), although many connection pools already do so internally; there is no
 /// need to wrap it twice.
-#[async_trait(?Send)]
 pub trait Backend<I: 'static = SimpleInput>: Clone {
     type Output;
     type RollbackToken;
@@ -38,10 +57,10 @@ pub trait Backend<I: 'static = SimpleInput>: Clone {
     /// Returns a boolean of whether to allow or deny the request, arbitrary output that can be used
     /// to transform the allowed and denied responses, and a token to allow the rate limit counter
     /// to be rolled back in certain conditions.
-    async fn request(
+    fn request(
         &self,
         input: I,
-    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error>;
+    ) -> impl Future<Output = Result<(Decision, Self::Output, Self::RollbackToken), Self::Error>>;
 
     /// Under certain conditions we may not want to rollback the request operation.
     ///
@@ -55,7 +74,8 @@ pub trait Backend<I: 'static = SimpleInput>: Clone {
     /// # Arguments
     ///
     /// * `token`: The token returned from the initial call to [Backend::request()].
-    async fn rollback(&self, token: Self::RollbackToken) -> Result<(), Self::Error>;
+    fn rollback(&self, token: Self::RollbackToken)
+        -> impl Future<Output = Result<(), Self::Error>>;
 }
 
 /// A default [Backend] Input structure.
@@ -85,12 +105,11 @@ pub struct SimpleOutput {
 }
 
 /// Additional functions for a [Backend] that uses [SimpleInput] and [SimpleOutput].
-#[async_trait(?Send)]
 pub trait SimpleBackend: Backend<SimpleInput, Output = SimpleOutput> {
     /// Removes the bucket for a given rate limit key.
     ///
     /// Intended to be used to reset a key before changing the interval.
-    async fn remove_key(&self, key: &str) -> Result<(), Self::Error>;
+    fn remove_key(&self, key: &str) -> impl Future<Output = Result<(), Self::Error>>;
 }
 
 impl HeaderCompatibleOutput for SimpleOutput {

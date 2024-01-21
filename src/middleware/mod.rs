@@ -141,8 +141,8 @@ where
 
             let (output, rollback) = match backend.request(input).await {
                 // Able to successfully query rate limiter backend
-                Ok((allow, output, rollback)) => {
-                    if !allow {
+                Ok((decision, output, rollback)) => {
+                    if decision.is_denied() {
                         let response: HttpResponse = (denied_response)(&output);
                         return Ok(req.into_response(response).map_into_right_body());
                     }

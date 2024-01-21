@@ -1,9 +1,9 @@
+use crate::backend::Decision;
 use crate::middleware::*;
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::http::StatusCode;
 use actix_web::test::{read_body, TestRequest};
 use actix_web::{get, test, App, HttpResponse, Responder, ResponseError};
-use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -32,7 +32,6 @@ struct MockBackendInput<T> {
     backend_error: Option<MockError>,
 }
 
-#[async_trait(?Send)]
 impl<T: 'static> Backend<MockBackendInput<T>> for MockBackend {
     type Output = T;
     type RollbackToken = ();
@@ -41,12 +40,12 @@ impl<T: 'static> Backend<MockBackendInput<T>> for MockBackend {
     async fn request(
         &self,
         input: MockBackendInput<T>,
-    ) -> Result<(bool, Self::Output, Self::RollbackToken), Self::Error> {
+    ) -> Result<(Decision, Self::Output, Self::RollbackToken), Self::Error> {
         if let Some(e) = input.backend_error {
             return Err(e);
         }
         let allow = self.0.counter.fetch_add(1, Ordering::Relaxed) < input.max;
-        Ok((allow, input.output, ()))
+        Ok((Decision::from_allowed(allow), input.output, ()))
     }
 
     async fn rollback(&self, _: Self::RollbackToken) -> Result<(), Self::Error> {

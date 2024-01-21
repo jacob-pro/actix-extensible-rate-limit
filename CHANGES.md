@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0 2024-01-21
+
+- Breaking: Removes async-trait dependency.
+- Breaking: Redis backend now uses BITFIELD to store counts.
+- Breaking: Backend return type is now a `Decision` enum instead of a `bool`.
+
 ## 0.2.2 2022-04-19
 
 - Improve documentation.
