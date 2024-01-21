@@ -2,7 +2,7 @@ use crate::backend::{Backend, Decision, SimpleBackend, SimpleInput, SimpleOutput
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, ResponseError};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, Cmd};
+use redis::AsyncCommands;
 use std::borrow::Cow;
 use std::time::Duration;
 use thiserror::Error;
@@ -146,17 +146,26 @@ impl Backend<SimpleInput> for RedisBackend {
         let key = self.make_key(&token);
 
         let mut con = self.connection.clone();
-        let mut cmd = Cmd::new();
-        cmd.arg("BITFIELD")
+
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            // Decrement the rate limit count
+            .cmd("BITFIELD")
             .arg(key.as_ref())
             .arg("OVERFLOW")
             .arg("SAT")
             .arg("INCRBY")
             .arg(BITFIELD_ENCODING)
             .arg(BITFIELD_OFFSET)
-            .arg(-1);
+            .arg(-1)
+            // Set the key to expire immediately, if it doesn't already have an expiry
+            .cmd("EXPIRE")
+            .arg(key.as_ref())
+            .arg(0)
+            .arg("NX")
+            .ignore();
 
-        cmd.query_async(&mut con).await?;
+        pipe.query_async(&mut con).await?;
 
         Ok(())
     }
@@ -177,6 +186,7 @@ impl SimpleBackend for RedisBackend {
 mod tests {
     use super::*;
     use crate::HeaderCompatibleOutput;
+    use redis::Cmd;
 
     const MINUTE: Duration = Duration::from_secs(60);
 
