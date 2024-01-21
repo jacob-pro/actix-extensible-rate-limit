@@ -31,7 +31,7 @@ impl Decision {
     }
 
     pub fn is_allowed(self) -> bool {
-        self == Self::Allowed
+        matches!(self, Self::Allowed)
     }
 
     pub fn is_denied(self) -> bool {
