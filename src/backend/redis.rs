@@ -199,12 +199,21 @@ mod tests {
             max_requests: 5,
             key: "test_allow_deny".to_string(),
         };
+        let mut prev_seconds_until_reset = u64::MAX;
         for i in (0..5).rev() {
             // First 5 should be allowed
             let (decision, output, _) = backend.request(input.clone()).await.unwrap();
+            // Remaining counts should be decreasing
             assert_eq!(output.remaining, i);
+            // Limit should be the same
             assert_eq!(output.limit, 5);
+            // Request should be allowed
             assert!(decision.is_allowed());
+            // Check expiry time is going down each time (instead of being reset)
+            assert!(output.seconds_until_reset() < prev_seconds_until_reset);
+            // Sleep for a second
+            prev_seconds_until_reset = output.seconds_until_reset();
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
         // Sixth should be denied
         let (decision, output, _) = backend.request(input.clone()).await.unwrap();
@@ -290,7 +299,7 @@ mod tests {
         let mut con = backend.connection.clone();
         // The rollback could happen after the key has already expired / gone
         backend.rollback(key.to_string()).await.unwrap();
-        // In which case the count should remain at 0
+        // In which case the count should remain at 0 (it must not become negative)
         let mut cmd = Cmd::new();
         cmd.arg("BITFIELD")
             .arg(key)
