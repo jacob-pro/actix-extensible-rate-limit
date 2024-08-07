@@ -131,7 +131,7 @@ where
         let rollback_condition = self.rollback_condition.clone();
 
         Box::pin(async move {
-            let input = match (input_fn)(&req).await {
+            let input = match input_fn(&req).await {
                 Ok(input) => input,
                 Err(e) => {
                     log::error!("Rate limiter input function failed: {e}");
@@ -143,7 +143,7 @@ where
                 // Able to successfully query rate limiter backend
                 Ok((decision, output, rollback)) => {
                     if decision.is_denied() {
-                        let response: HttpResponse = (denied_response)(&output);
+                        let response: HttpResponse = denied_response(&output);
                         return Ok(req.into_response(response).map_into_right_body());
                     }
                     (Some(output), Some(rollback))
@@ -179,7 +179,7 @@ where
             }
 
             if let Some(transformation) = allowed_transformation {
-                (transformation)(service_response.headers_mut(), output.as_ref(), rolled_back);
+                transformation(service_response.headers_mut(), output.as_ref(), rolled_back);
             }
 
             Ok(service_response.map_into_left_body())
